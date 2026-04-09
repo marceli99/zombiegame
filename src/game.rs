@@ -70,7 +70,7 @@ pub fn new_player(x: f32, y: f32) -> Player {
         x, y, angle: 0.0,
         hp: 100, max_hp: 100,
         fire_timer: 0.0, damage_flash: 0.0,
-        ammo: 30, alive: true,
+        ammo: 60, alive: true,
     }
 }
 
@@ -127,7 +127,7 @@ fn update_single_player(
     if inp_shooting && p.fire_timer <= 0.0 && p.ammo > 0 {
         p.fire_timer = FIRE_COOLDOWN;
         p.ammo -= 1;
-        let spread = rand::gen_range(-0.05f32, 0.05);
+        let spread = rand::gen_range(-0.08f32, 0.08);
         let angle = p.angle + spread;
         let gx = p.x + angle.cos() * 16.0;
         let gy = p.y + angle.sin() * 16.0;
@@ -215,7 +215,8 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             let dy = py - z.y;
             if dx * dx + dy * dy < 18.0 * 18.0 && is_alive {
                 let player = if player_idx == 0 { &mut state.player1 } else { &mut state.player2 };
-                player.hp -= 1;
+                let dmg = if z.variant == 3 { 2 } else { 1 };
+                player.hp -= dmg;
                 player.damage_flash = 1.0;
                 if player.hp % 10 == 0 {
                     state.events.push(SND_HURT);
@@ -258,7 +259,7 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
                             PickupKind::Ammo
                         };
                         state.pickups.push(Pickup {
-                            x: z.x, y: z.y, kind, alive: true, timer: 10.0,
+                            x: z.x, y: z.y, kind, alive: true, timer: 30.0,
                         });
                     }
                 }
@@ -351,11 +352,13 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             };
             let wave = state.wave;
             let hp = 50 + (wave as i32) * 15;
+            let is_fire = wave >= 2 && rand::gen_range(0.0f32, 1.0) < 0.3;
+            let variant = if is_fire { 3 } else { rand::gen_range(0u8, 3) };
+            let base_speed = ZOMBIE_BASE_SPEED + (wave as f32) * 3.0 + rand::gen_range(-10.0, 10.0);
+            let speed = if is_fire { base_speed * 1.3 } else { base_speed };
             state.zombies.push(Zombie {
                 x: sx, y: sy, hp, max_hp: hp, alive: true,
-                speed: ZOMBIE_BASE_SPEED + (wave as f32) * 3.0 + rand::gen_range(-10.0, 10.0),
-                damage_flash: 0.0,
-                variant: rand::gen_range(0, 3),
+                speed, damage_flash: 0.0, variant,
             });
         }
     }

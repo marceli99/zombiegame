@@ -76,6 +76,7 @@ async fn main() {
                     app.screen = Screen::Playing;
                     app.socket = None;
                     play_sfx(&sounds.wave_start, 0.5);
+                    play_music(&sounds.game_music, 0.12);
                 }
                 if is_key_pressed(KeyCode::Key2) {
                     play_sfx(&sounds.menu_select, 0.6);
@@ -127,6 +128,7 @@ async fn main() {
                         app.screen = Screen::Playing;
                         app.net_timer = 0.0;
                         play_sfx(&sounds.wave_start, 0.5);
+                        play_music(&sounds.game_music, 0.12);
                         if let (Some(sock), Some(addr)) = (&app.socket, &app.peer_addr) {
                             let _ = sock.send_to(&[2], addr);
                         }
@@ -207,6 +209,7 @@ async fn main() {
                                     app.screen = Screen::Playing;
                                     app.net_timer = 0.0;
                                     play_sfx(&sounds.wave_start, 0.5);
+                                    play_music(&sounds.game_music, 0.12);
                                 }
                             }
                         }
@@ -219,6 +222,7 @@ async fn main() {
             Screen::Playing => {
                 if is_key_pressed(KeyCode::Escape) {
                     play_sfx(&sounds.menu_navigate, 0.5);
+                    stop_music(&sounds.game_music);
                     app.screen = Screen::Menu;
                     app.socket = None;
                     app.connected = false;
@@ -305,6 +309,7 @@ async fn main() {
                 draw_game(&app.game, app.camera_offset);
 
                 if app.game.game_over {
+                    stop_music(&sounds.game_music);
                     app.screen = Screen::GameOver;
                 }
             }
@@ -334,6 +339,7 @@ async fn main() {
                 }
                 if is_key_pressed(KeyCode::Escape) {
                     play_sfx(&sounds.menu_navigate, 0.5);
+                    stop_music(&sounds.game_music);
                     app.screen = Screen::Menu;
                     app.socket = None;
                     app.connected = false;

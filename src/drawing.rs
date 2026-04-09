@@ -109,22 +109,44 @@ pub fn draw_zombie(z: &Zombie, time: f32) {
 
     draw_ellipse(z.x, z.y + 12.0, 9.0, 4.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.3));
 
+    let is_fire = z.variant == 3;
     let (body_r, body_g) = match z.variant {
         0 => (0.35 + flash, 0.55),
         1 => (0.50 + flash, 0.45),
+        3 => (0.85 + flash, 0.30),
         _ => (0.30 + flash, 0.50),
     };
 
-    draw_rectangle(z.x - 7.0, z.y - 6.0 + bob, 14.0, 14.0, Color::new(body_r, body_g, 0.2, 1.0));
-    draw_rectangle(z.x - 6.0, z.y - 14.0 + bob, 12.0, 10.0, Color::new(body_r - 0.05, body_g + 0.05, 0.22, 1.0));
+    // Fire zombie flame aura
+    if is_fire {
+        let flicker1 = ((time * 12.0 + z.x * 0.3).sin() + 1.0) * 0.5;
+        let flicker2 = ((time * 9.0 + z.y * 0.5).cos() + 1.0) * 0.5;
+        draw_circle(z.x, z.y - 4.0 + bob, 14.0 + flicker1 * 4.0, Color::new(1.0, 0.4, 0.0, 0.15));
+        draw_circle(z.x - 3.0, z.y - 10.0 + bob, 6.0 + flicker2 * 3.0, Color::new(1.0, 0.6, 0.0, 0.25));
+        draw_circle(z.x + 4.0, z.y - 12.0 + bob, 5.0 + flicker1 * 2.0, Color::new(1.0, 0.3, 0.0, 0.2));
+        // Flame tips above head
+        let tip_y = z.y - 18.0 + bob - flicker1 * 5.0;
+        draw_rectangle(z.x - 2.0, tip_y, 4.0, 6.0, Color::new(1.0, 0.8, 0.0, 0.4 * flicker2));
+        draw_rectangle(z.x + 3.0, tip_y + 2.0, 3.0, 4.0, Color::new(1.0, 0.5, 0.0, 0.3 * flicker1));
+        draw_rectangle(z.x - 5.0, tip_y + 3.0, 3.0, 3.0, Color::new(1.0, 0.6, 0.1, 0.3 * flicker2));
+    }
+
+    let body_b = if is_fire { 0.05 } else { 0.2 };
+    draw_rectangle(z.x - 7.0, z.y - 6.0 + bob, 14.0, 14.0, Color::new(body_r, body_g, body_b, 1.0));
+    draw_rectangle(z.x - 6.0, z.y - 14.0 + bob, 12.0, 10.0, Color::new(body_r - 0.05, body_g + 0.05, body_b + 0.02, 1.0));
 
     let glow = ((time * 5.0).sin() + 1.0) * 0.15;
-    draw_rectangle(z.x - 4.0, z.y - 11.0 + bob, 3.0, 3.0, Color::new(0.9 + glow, 0.15, 0.1, 1.0));
-    draw_rectangle(z.x + 2.0, z.y - 11.0 + bob, 3.0, 3.0, Color::new(0.9 + glow, 0.15, 0.1, 1.0));
+    let eye_color = if is_fire {
+        Color::new(1.0, 0.8 + glow, 0.0, 1.0)
+    } else {
+        Color::new(0.9 + glow, 0.15, 0.1, 1.0)
+    };
+    draw_rectangle(z.x - 4.0, z.y - 11.0 + bob, 3.0, 3.0, eye_color);
+    draw_rectangle(z.x + 2.0, z.y - 11.0 + bob, 3.0, 3.0, eye_color);
 
     let arm_sway = (time * 4.0 + z.y * 0.1).sin() * 3.0;
-    draw_rectangle(z.x - 11.0 + arm_sway, z.y - 4.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, 0.2, 1.0));
-    draw_rectangle(z.x + 7.0 - arm_sway, z.y - 2.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, 0.2, 1.0));
+    draw_rectangle(z.x - 11.0 + arm_sway, z.y - 4.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, body_b, 1.0));
+    draw_rectangle(z.x + 7.0 - arm_sway, z.y - 2.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, body_b, 1.0));
 
     if z.hp < z.max_hp {
         let bar_w = 18.0;

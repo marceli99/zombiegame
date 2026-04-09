@@ -184,6 +184,60 @@ fn gen_menu_music() -> Vec<u8> {
     make_wav(&s)
 }
 
+// Gameplay: light ambient melody - gentle, loopable, quiet
+fn gen_game_music() -> Vec<u8> {
+    let sr = 44100;
+    let duration = 8.0; // 8 second loop
+    let n = (sr as f32 * duration) as usize;
+    let mut s = vec![0i16; n];
+
+    // Simple pentatonic melody notes (C D E G A) in Hz, two octaves
+    let melody: &[f32] = &[
+        261.6, 293.7, 329.6, 392.0, 440.0,
+        523.3, 587.3, 659.3, 784.0, 880.0,
+    ];
+    // Note sequence — gentle ascending/descending pattern
+    let seq: &[usize] = &[0, 2, 4, 7, 5, 3, 1, 4, 6, 8, 5, 2, 3, 1, 0, 2];
+    let note_dur = duration / seq.len() as f32;
+
+    for i in 0..n {
+        let t = i as f32 / sr as f32;
+
+        // Smooth loop envelope
+        let fade = (sr as f32 * 0.3) as usize;
+        let loop_env = if i < fade {
+            i as f32 / fade as f32
+        } else if i > n - fade {
+            (n - i) as f32 / fade as f32
+        } else {
+            1.0
+        };
+
+        // Melody: soft sine with gentle attack/release per note
+        let note_idx = ((t / note_dur) as usize) % seq.len();
+        let note_t = (t % note_dur) / note_dur;
+        let note_env = (note_t * 8.0).min(1.0) * (1.0 - note_t).powf(0.5);
+        let freq = melody[seq[note_idx]];
+        let mel = (t * freq * std::f32::consts::TAU).sin() * 0.25 * note_env;
+        // Soft overtone
+        let mel2 = (t * freq * 2.0 * std::f32::consts::TAU).sin() * 0.06 * note_env;
+
+        // Warm pad — slow chord (root + fifth)
+        let pad_pulse = ((t * 0.4).sin() * 0.5 + 0.5) * 0.12;
+        let pad = (t * 130.8 * std::f32::consts::TAU).sin() * pad_pulse
+                + (t * 196.0 * std::f32::consts::TAU).sin() * pad_pulse * 0.7;
+
+        // Very subtle high shimmer
+        let shimmer_freq = 1318.5 + (t * 0.6).sin() * 40.0;
+        let shimmer = (t * shimmer_freq * std::f32::consts::TAU).sin()
+            * 0.02 * ((t * 1.1).sin() * 0.5 + 0.5);
+
+        let mix = (mel + mel2 + pad + shimmer) * loop_env;
+        s[i] = (mix * 6000.0).clamp(-32000.0, 32000.0) as i16;
+    }
+    make_wav(&s)
+}
+
 pub struct Sounds {
     pub shoot: Sound,
     pub zombie_hit: Sound,
@@ -195,6 +249,7 @@ pub struct Sounds {
     pub menu_navigate: Sound,
     pub menu_select: Sound,
     pub menu_music: Sound,
+    pub game_music: Sound,
 }
 
 pub async fn load_sounds() -> Sounds {
@@ -209,6 +264,7 @@ pub async fn load_sounds() -> Sounds {
         menu_navigate: load_sound_from_bytes(&gen_menu_navigate_sound()).await.unwrap(),
         menu_select: load_sound_from_bytes(&gen_menu_select_sound()).await.unwrap(),
         menu_music: load_sound_from_bytes(&gen_menu_music()).await.unwrap(),
+        game_music: load_sound_from_bytes(&gen_game_music()).await.unwrap(),
     }
 }
 
