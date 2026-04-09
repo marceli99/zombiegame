@@ -27,6 +27,8 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     let sounds = load_sounds().await;
+    play_music(&sounds.menu_music, 0.35);
+    let mut menu_music_playing = true;
     let mut app = AppState {
         screen: Screen::Menu,
         game: new_game(false),
@@ -47,17 +49,28 @@ async fn main() {
 
         match app.screen {
             Screen::Menu => {
+                // Ensure menu music is playing
+                if !menu_music_playing {
+                    play_music(&sounds.menu_music, 0.35);
+                    menu_music_playing = true;
+                }
+
                 if is_key_pressed(KeyCode::Left) && app.selected_res > 0 {
                     app.selected_res -= 1;
                     let (w, h) = RESOLUTIONS[app.selected_res];
                     request_new_screen_size(w as f32, h as f32);
+                    play_sfx(&sounds.menu_navigate, 0.5);
                 }
                 if is_key_pressed(KeyCode::Right) && app.selected_res < RESOLUTIONS.len() - 1 {
                     app.selected_res += 1;
                     let (w, h) = RESOLUTIONS[app.selected_res];
                     request_new_screen_size(w as f32, h as f32);
+                    play_sfx(&sounds.menu_navigate, 0.5);
                 }
                 if is_key_pressed(KeyCode::Key1) {
+                    play_sfx(&sounds.menu_select, 0.6);
+                    stop_music(&sounds.menu_music);
+                    menu_music_playing = false;
                     app.net_role = NetRole::Solo;
                     app.game = new_game(false);
                     app.screen = Screen::Playing;
@@ -65,6 +78,9 @@ async fn main() {
                     play_sfx(&sounds.wave_start, 0.5);
                 }
                 if is_key_pressed(KeyCode::Key2) {
+                    play_sfx(&sounds.menu_select, 0.6);
+                    stop_music(&sounds.menu_music);
+                    menu_music_playing = false;
                     app.net_role = NetRole::Host;
                     app.connected = false;
                     app.peer_addr = None;
@@ -75,6 +91,9 @@ async fn main() {
                     }
                 }
                 if is_key_pressed(KeyCode::Key3) {
+                    play_sfx(&sounds.menu_select, 0.6);
+                    stop_music(&sounds.menu_music);
+                    menu_music_playing = false;
                     app.net_role = NetRole::Client;
                     app.connected = false;
                     app.ip_input = String::new();
@@ -90,6 +109,7 @@ async fn main() {
                 let cy = screen_height() / 2.0;
 
                 if is_key_pressed(KeyCode::Escape) {
+                    play_sfx(&sounds.menu_navigate, 0.5);
                     app.screen = Screen::Menu;
                     app.socket = None;
                     next_frame().await;
@@ -198,6 +218,7 @@ async fn main() {
 
             Screen::Playing => {
                 if is_key_pressed(KeyCode::Escape) {
+                    play_sfx(&sounds.menu_navigate, 0.5);
                     app.screen = Screen::Menu;
                     app.socket = None;
                     app.connected = false;
@@ -305,12 +326,14 @@ async fn main() {
                 draw_text_centered("Nacisnij [ESC] - menu glowne", cx, cy + 70.0, 24.0, GRAY);
 
                 if is_key_pressed(KeyCode::R) {
+                    play_sfx(&sounds.menu_select, 0.6);
                     let tp = app.game.two_player;
                     app.game = new_game(tp);
                     app.screen = Screen::Playing;
                     play_sfx(&sounds.wave_start, 0.5);
                 }
                 if is_key_pressed(KeyCode::Escape) {
+                    play_sfx(&sounds.menu_navigate, 0.5);
                     app.screen = Screen::Menu;
                     app.socket = None;
                     app.connected = false;

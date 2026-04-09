@@ -114,6 +114,76 @@ fn gen_no_ammo_sound() -> Vec<u8> {
     make_wav(&s)
 }
 
+// Menu: short tick when navigating
+fn gen_menu_navigate_sound() -> Vec<u8> {
+    let n = 1100; // ~25ms
+    let mut s = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(3);
+        let v = (t * 1200.0 * std::f32::consts::TAU).sin();
+        s[i] = (v * env * 5000.0) as i16;
+    }
+    make_wav(&s)
+}
+
+// Menu: confirm selection
+fn gen_menu_select_sound() -> Vec<u8> {
+    let n = 6600; // ~150ms
+    let mut s = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32) * (i as f32 / 300.0).min(1.0);
+        // Two-note ascending chirp
+        let freq = if i < n / 2 { 500.0 } else { 750.0 };
+        let v = (t * freq * std::f32::consts::TAU).sin();
+        let v2 = (t * freq * 2.0 * std::f32::consts::TAU).sin() * 0.2;
+        s[i] = ((v + v2) * env * 9000.0) as i16;
+    }
+    make_wav(&s)
+}
+
+// Menu: ambient background loop - dark, moody drone
+fn gen_menu_music() -> Vec<u8> {
+    let sr = 44100;
+    let duration = 4.0; // 4 second loop
+    let n = (sr as f32 * duration) as usize;
+    let mut s = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / sr as f32;
+        // Smooth loop: fade in/out at edges
+        let fade_samples = (sr as f32 * 0.15) as usize;
+        let loop_env = if i < fade_samples {
+            i as f32 / fade_samples as f32
+        } else if i > n - fade_samples {
+            (n - i) as f32 / fade_samples as f32
+        } else {
+            1.0
+        };
+
+        // Low drone
+        let drone = (t * 55.0 * std::f32::consts::TAU).sin() * 0.4
+            + (t * 82.5 * std::f32::consts::TAU).sin() * 0.25;
+
+        // Slow pulsing pad
+        let pulse = ((t * 0.5).sin() + 1.0) * 0.5;
+        let pad = (t * 110.0 * std::f32::consts::TAU).sin() * 0.15 * pulse;
+
+        // Eerie high whistle that drifts
+        let drift = (t * 0.7).sin() * 30.0;
+        let whistle = (t * (330.0 + drift) * std::f32::consts::TAU).sin() * 0.06
+            * ((t * 1.3).sin() * 0.5 + 0.5);
+
+        // Subtle noise texture
+        let noise = ((i as f32 * 5432.1).sin() * 43758.5453).fract() * 2.0 - 1.0;
+        let noise_filtered = noise * 0.03;
+
+        let mix = (drone + pad + whistle + noise_filtered) * loop_env;
+        s[i] = (mix * 7000.0).clamp(-32000.0, 32000.0) as i16;
+    }
+    make_wav(&s)
+}
+
 pub struct Sounds {
     pub shoot: Sound,
     pub zombie_hit: Sound,
@@ -122,6 +192,9 @@ pub struct Sounds {
     pub hurt: Sound,
     pub wave_start: Sound,
     pub no_ammo: Sound,
+    pub menu_navigate: Sound,
+    pub menu_select: Sound,
+    pub menu_music: Sound,
 }
 
 pub async fn load_sounds() -> Sounds {
@@ -133,7 +206,18 @@ pub async fn load_sounds() -> Sounds {
         hurt: load_sound_from_bytes(&gen_hurt_sound()).await.unwrap(),
         wave_start: load_sound_from_bytes(&gen_wave_sound()).await.unwrap(),
         no_ammo: load_sound_from_bytes(&gen_no_ammo_sound()).await.unwrap(),
+        menu_navigate: load_sound_from_bytes(&gen_menu_navigate_sound()).await.unwrap(),
+        menu_select: load_sound_from_bytes(&gen_menu_select_sound()).await.unwrap(),
+        menu_music: load_sound_from_bytes(&gen_menu_music()).await.unwrap(),
     }
+}
+
+pub fn play_music(sound: &Sound, volume: f32) {
+    play_sound(sound, PlaySoundParams { looped: true, volume });
+}
+
+pub fn stop_music(sound: &Sound) {
+    macroquad::audio::stop_sound(sound);
 }
 
 pub fn play_sfx(sound: &Sound, volume: f32) {
