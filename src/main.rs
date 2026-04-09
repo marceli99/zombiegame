@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use macroquad::audio::{Sound, load_sound_from_bytes, play_sound, PlaySoundParams};
 
 // ── Constants ──────────────────────────────────────────────
 const TILE: f32 = 32.0;
@@ -9,6 +10,21 @@ const BULLET_SPEED: f32 = 500.0;
 const ZOMBIE_BASE_SPEED: f32 = 45.0;
 const FIRE_COOLDOWN: f32 = 0.18;
 const PICKUP_RANGE: f32 = 40.0;
+
+const RESOLUTIONS: [(i32, i32); 5] = [
+    (800, 608),
+    (1024, 768),
+    (1280, 720),
+    (1600, 900),
+    (1920, 1080),
+];
+
+#[derive(PartialEq)]
+enum Screen {
+    Menu,
+    Playing,
+    GameOver,
+}
 
 // ── Map ────────────────────────────────────────────────────
 // 0=grass, 1=path, 2=wall, 3=tree, 4=water, 5=flowers, 6=dark grass
@@ -136,6 +152,15 @@ struct GameState {
     game_over: bool,
     screen_shake: f32,
     time: f32,
+    use_keyboard_aim: bool,
+    kb_aim_angle: f32,
+}
+
+struct AppState {
+    screen: Screen,
+    game: GameState,
+    selected_res: usize,
+    camera_offset: Vec2,
 }
 
 // ── Drawing helpers ────────────────────────────────────────
@@ -311,47 +336,270 @@ fn draw_text_centered(text: &str, x: f32, y: f32, font_size: f32, color: Color) 
     draw_text(text, x - dims.width / 2.0, y, font_size, color);
 }
 
+// ── Sound generation ──────────────────────────────────────
+fn make_wav(samples: &[i16]) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let file_len = 36 + data_len;
+    let sample_rate: u32 = 44100;
+    let mut buf = Vec::with_capacity(44 + data_len as usize);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&file_len.to_le_bytes());
+    buf.extend_from_slice(b"WAVEfmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+    buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    buf
+}
+
+fn gen_shoot_sound() -> Vec<u8> {
+    let n = 2200; // ~50ms
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(2);
+        let noise = ((i as f32 * 12345.6789).sin() * 43758.5453).fract() * 2.0 - 1.0;
+        let tone = (t * 800.0 * std::f32::consts::TAU).sin() * 0.3;
+        samples[i] = ((noise * 0.7 + tone) * env * 12000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_zombie_death_sound() -> Vec<u8> {
+    let n = 6600; // ~150ms
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(2);
+        let freq = 120.0 - t * 300.0;
+        let s = (t * freq * std::f32::consts::TAU).sin();
+        let noise = ((i as f32 * 7654.321).sin() * 43758.5453).fract() * 2.0 - 1.0;
+        samples[i] = ((s * 0.6 + noise * 0.4) * env * 14000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_zombie_hit_sound() -> Vec<u8> {
+    let n = 2000;
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(3);
+        let s = (t * 200.0 * std::f32::consts::TAU).sin();
+        let noise = ((i as f32 * 9876.543).sin() * 43758.5453).fract() * 2.0 - 1.0;
+        samples[i] = ((s * 0.5 + noise * 0.5) * env * 8000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_pickup_sound() -> Vec<u8> {
+    let n = 4400; // ~100ms
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32) * (i as f32 / 400.0).min(1.0);
+        let freq = 600.0 + t * 1200.0;
+        let s = (t * freq * std::f32::consts::TAU).sin();
+        samples[i] = (s * env * 10000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_hurt_sound() -> Vec<u8> {
+    let n = 4400;
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(2);
+        let s = (t * 150.0 * std::f32::consts::TAU).sin();
+        let s2 = (t * 180.0 * std::f32::consts::TAU).sin();
+        samples[i] = ((s * 0.5 + s2 * 0.5) * env * 12000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_wave_sound() -> Vec<u8> {
+    let n = 13230; // ~300ms
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32) * (i as f32 / 800.0).min(1.0);
+        let freq = 400.0 + t * 800.0;
+        let s = (t * freq * std::f32::consts::TAU).sin();
+        let s2 = (t * freq * 1.5 * std::f32::consts::TAU).sin() * 0.3;
+        samples[i] = ((s + s2) * env * 8000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+fn gen_no_ammo_sound() -> Vec<u8> {
+    let n = 2200;
+    let mut samples = vec![0i16; n];
+    for i in 0..n {
+        let t = i as f32 / 44100.0;
+        let env = (1.0 - i as f32 / n as f32).powi(2);
+        let click = if i < 200 { 1.0 } else { 0.0 };
+        let tone = (t * 300.0 * std::f32::consts::TAU).sin() * 0.5;
+        samples[i] = ((click + tone) * env * 6000.0) as i16;
+    }
+    make_wav(&samples)
+}
+
+struct Sounds {
+    shoot: Sound,
+    zombie_hit: Sound,
+    zombie_death: Sound,
+    pickup: Sound,
+    hurt: Sound,
+    wave_start: Sound,
+    no_ammo: Sound,
+}
+
+async fn load_sounds() -> Sounds {
+    Sounds {
+        shoot: load_sound_from_bytes(&gen_shoot_sound()).await.unwrap(),
+        zombie_hit: load_sound_from_bytes(&gen_zombie_hit_sound()).await.unwrap(),
+        zombie_death: load_sound_from_bytes(&gen_zombie_death_sound()).await.unwrap(),
+        pickup: load_sound_from_bytes(&gen_pickup_sound()).await.unwrap(),
+        hurt: load_sound_from_bytes(&gen_hurt_sound()).await.unwrap(),
+        wave_start: load_sound_from_bytes(&gen_wave_sound()).await.unwrap(),
+        no_ammo: load_sound_from_bytes(&gen_no_ammo_sound()).await.unwrap(),
+    }
+}
+
+fn play_sfx(sound: &Sound, volume: f32) {
+    play_sound(sound, PlaySoundParams { looped: false, volume });
+}
+
 // ── Main ───────────────────────────────────────────────────
 fn window_conf() -> Conf {
     Conf {
         window_title: "Zombie Survival".to_string(),
-        window_width: (MAP_W as i32) * TILE as i32,
-        window_height: (MAP_H as i32) * TILE as i32,
-        window_resizable: false,
+        window_width: 800,
+        window_height: 608,
+        window_resizable: true,
         ..Default::default()
+    }
+}
+
+fn draw_menu(selected_res: usize) {
+    clear_background(Color::new(0.08, 0.08, 0.12, 1.0));
+    let cx = screen_width() / 2.0;
+    let cy = screen_height() / 2.0;
+
+    draw_text_centered("ZOMBIE SURVIVAL", cx, cy - 160.0, 52.0, Color::new(0.9, 0.2, 0.15, 1.0));
+
+    // Resolution selection
+    draw_text_centered("Rozdzielczosc (lewo/prawo):", cx, cy - 80.0, 24.0, GRAY);
+    let (rw, rh) = RESOLUTIONS[selected_res];
+    let arrow_left = if selected_res > 0 { "< " } else { "  " };
+    let arrow_right = if selected_res < RESOLUTIONS.len() - 1 { " >" } else { "  " };
+    draw_text_centered(
+        &format!("{}{} x {}{}", arrow_left, rw, rh, arrow_right),
+        cx, cy - 45.0, 32.0, WHITE,
+    );
+
+    draw_text_centered("--- Sterowanie ---", cx, cy + 10.0, 22.0, Color::new(0.6, 0.8, 1.0, 1.0));
+    draw_text_centered("WASD / Strzalki - ruch", cx, cy + 40.0, 20.0, GRAY);
+    draw_text_centered("Myszka - celowanie + LPM strzal", cx, cy + 65.0, 20.0, GRAY);
+    draw_text_centered("IJKL - celowanie klawiatura", cx, cy + 90.0, 20.0, GRAY);
+    draw_text_centered("Spacja - strzal (klawiatura)", cx, cy + 115.0, 20.0, GRAY);
+
+    let blink = (get_time() * 3.0).sin() > 0.0;
+    if blink {
+        draw_text_centered("Nacisnij [ENTER] aby grac", cx, cy + 170.0, 28.0, Color::new(0.3, 1.0, 0.3, 1.0));
     }
 }
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut state = new_game();
+    let sounds = load_sounds().await;
+    let mut app = AppState {
+        screen: Screen::Menu,
+        game: new_game(),
+        selected_res: 0,
+        camera_offset: Vec2::ZERO,
+    };
 
     loop {
         let dt = get_frame_time().min(0.05);
-        state.time += dt;
 
-        if state.game_over {
-            draw_game(&state);
-            draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.7));
-            let cx = screen_width() / 2.0;
-            let cy = screen_height() / 2.0;
-
-            draw_text_centered("GAME OVER", cx, cy - 60.0, 60.0, RED);
-            draw_text_centered(
-                &format!("Wave: {}  Score: {}  Kills: {}", state.wave, state.score, state.kills),
-                cx, cy, 28.0, WHITE,
-            );
-            draw_text_centered("Press [R] to restart", cx, cy + 50.0, 24.0, GRAY);
-
-            if is_key_pressed(KeyCode::R) {
-                state = new_game();
+        match app.screen {
+            Screen::Menu => {
+                if is_key_pressed(KeyCode::Left) && app.selected_res > 0 {
+                    app.selected_res -= 1;
+                    let (w, h) = RESOLUTIONS[app.selected_res];
+                    request_new_screen_size(w as f32, h as f32);
+                }
+                if is_key_pressed(KeyCode::Right) && app.selected_res < RESOLUTIONS.len() - 1 {
+                    app.selected_res += 1;
+                    let (w, h) = RESOLUTIONS[app.selected_res];
+                    request_new_screen_size(w as f32, h as f32);
+                }
+                if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                    app.game = new_game();
+                    app.screen = Screen::Playing;
+                    play_sfx(&sounds.wave_start, 0.5);
+                }
+                draw_menu(app.selected_res);
             }
-            next_frame().await;
-            continue;
+            Screen::Playing => {
+                if is_key_pressed(KeyCode::Escape) {
+                    app.screen = Screen::Menu;
+                    next_frame().await;
+                    continue;
+                }
+                app.game.time += dt;
+                update(&mut app.game, &sounds, dt);
+
+                // Compute camera offset to center player when window is larger than map
+                let map_pw = MAP_W as f32 * TILE;
+                let map_ph = MAP_H as f32 * TILE;
+                app.camera_offset = Vec2::new(
+                    (screen_width() - map_pw) / 2.0,
+                    (screen_height() - map_ph) / 2.0,
+                ).max(Vec2::ZERO);
+
+                draw_game(&app.game, app.camera_offset);
+
+                if app.game.game_over {
+                    app.screen = Screen::GameOver;
+                }
+            }
+            Screen::GameOver => {
+                app.game.time += dt;
+                draw_game(&app.game, app.camera_offset);
+                draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.7));
+                let cx = screen_width() / 2.0;
+                let cy = screen_height() / 2.0;
+
+                draw_text_centered("GAME OVER", cx, cy - 60.0, 60.0, RED);
+                draw_text_centered(
+                    &format!("Wave: {}  Score: {}  Kills: {}", app.game.wave, app.game.score, app.game.kills),
+                    cx, cy, 28.0, WHITE,
+                );
+                draw_text_centered("Nacisnij [R] aby zagrac ponownie", cx, cy + 40.0, 24.0, GRAY);
+                draw_text_centered("Nacisnij [ESC] - menu glowne", cx, cy + 70.0, 24.0, GRAY);
+
+                if is_key_pressed(KeyCode::R) {
+                    app.game = new_game();
+                    app.screen = Screen::Playing;
+                    play_sfx(&sounds.wave_start, 0.5);
+                }
+                if is_key_pressed(KeyCode::Escape) {
+                    app.screen = Screen::Menu;
+                }
+            }
         }
 
-        update(&mut state, dt);
-        draw_game(&state);
         next_frame().await;
     }
 }
@@ -383,11 +631,13 @@ fn new_game() -> GameState {
         game_over: false,
         screen_shake: 0.0,
         time: 0.0,
+        use_keyboard_aim: false,
+        kb_aim_angle: 0.0,
     }
 }
 
 // ── Update ─────────────────────────────────────────────────
-fn update(state: &mut GameState, dt: f32) {
+fn update(state: &mut GameState, sounds: &Sounds, dt: f32) {
     // Player movement
     let mut dx = 0.0f32;
     let mut dy = 0.0f32;
@@ -405,13 +655,42 @@ fn update(state: &mut GameState, dt: f32) {
         if can_move(state.player.x, ny, 6.0) { state.player.y = ny; }
     }
 
-    // Aim toward mouse
-    let (mx, my) = mouse_position();
-    state.player.angle = (my - state.player.y).atan2(mx - state.player.x);
+    // Keyboard aim (IJKL)
+    let mut aim_dx = 0.0f32;
+    let mut aim_dy = 0.0f32;
+    if is_key_down(KeyCode::I) { aim_dy -= 1.0; }
+    if is_key_down(KeyCode::K) { aim_dy += 1.0; }
+    if is_key_down(KeyCode::J) { aim_dx -= 1.0; }
+    if is_key_down(KeyCode::L) { aim_dx += 1.0; }
+    if aim_dx != 0.0 || aim_dy != 0.0 {
+        state.kb_aim_angle = aim_dy.atan2(aim_dx);
+        state.use_keyboard_aim = true;
+    }
 
-    // Shoot
+    // Mouse aim — switch back to mouse when it moves or clicked
+    let (mx_screen, my_screen) = mouse_position();
+    if is_mouse_button_down(MouseButton::Left) || is_mouse_button_down(MouseButton::Right) {
+        state.use_keyboard_aim = false;
+    }
+
+    if state.use_keyboard_aim {
+        state.player.angle = state.kb_aim_angle;
+    } else {
+        // Convert screen coords to world coords using the same camera as draw_game
+        let cam = Camera2D {
+            target: vec2(MAP_W as f32 * TILE / 2.0, MAP_H as f32 * TILE / 2.0),
+            zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
+            offset: vec2(0.0, 0.0),
+            ..Default::default()
+        };
+        let world_pos = cam.screen_to_world(vec2(mx_screen, my_screen));
+        state.player.angle = (world_pos.y - state.player.y).atan2(world_pos.x - state.player.x);
+    }
+
+    // Shoot (mouse LPM or Space)
     state.player.fire_timer -= dt;
-    if is_mouse_button_down(MouseButton::Left) && state.player.fire_timer <= 0.0 && state.player.ammo > 0 {
+    let shooting = is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Space);
+    if shooting && state.player.fire_timer <= 0.0 && state.player.ammo > 0 {
         state.player.fire_timer = FIRE_COOLDOWN;
         state.player.ammo -= 1;
         let spread = rand::gen_range(-0.05f32, 0.05);
@@ -426,6 +705,10 @@ fn update(state: &mut GameState, dt: f32) {
         });
         state.flashes.push(MuzzleFlash { x: gx, y: gy, life: 0.06 });
         state.screen_shake = 2.0;
+        play_sfx(&sounds.shoot, 0.3);
+    } else if shooting && state.player.fire_timer <= 0.0 && state.player.ammo == 0 {
+        state.player.fire_timer = FIRE_COOLDOWN * 2.0;
+        play_sfx(&sounds.no_ammo, 0.4);
     }
 
     state.screen_shake = (state.screen_shake - dt * 30.0).max(0.0);
@@ -467,6 +750,9 @@ fn update(state: &mut GameState, dt: f32) {
         if dist < 18.0 {
             state.player.hp -= 1;
             state.player.damage_flash = 1.0;
+            if state.player.hp % 10 == 0 {
+                play_sfx(&sounds.hurt, 0.4);
+            }
             if state.player.hp <= 0 {
                 state.game_over = true;
             }
@@ -489,11 +775,13 @@ fn update(state: &mut GameState, dt: f32) {
                     value: dmg,
                     life: 0.8,
                 });
+                play_sfx(&sounds.zombie_hit, 0.2);
                 if z.hp <= 0 {
                     z.alive = false;
                     spawn_blood(&mut state.particles, z.x, z.y, 15);
                     state.score += 10 * state.wave;
                     state.kills += 1;
+                    play_sfx(&sounds.zombie_death, 0.5);
                     // Drop pickup
                     if rand::gen_range(0.0f32, 1.0) < 0.25 {
                         let kind = if rand::gen_range(0.0f32, 1.0) < 0.4 {
@@ -520,6 +808,7 @@ fn update(state: &mut GameState, dt: f32) {
         let ddy = py - pk.y;
         if ddx * ddx + ddy * ddy < PICKUP_RANGE * PICKUP_RANGE {
             pk.alive = false;
+            play_sfx(&sounds.pickup, 0.5);
             match pk.kind {
                 PickupKind::Health => {
                     state.player.hp = (state.player.hp + 25).min(state.player.max_hp);
@@ -559,6 +848,7 @@ fn update(state: &mut GameState, dt: f32) {
             state.zombies_to_spawn = 3 + state.wave * 2;
             state.wave_delay = 3.0;
             state.player.ammo += 10 + (state.wave as i32) * 2;
+            play_sfx(&sounds.wave_start, 0.6);
         }
     }
 
@@ -595,8 +885,17 @@ fn update(state: &mut GameState, dt: f32) {
 }
 
 // ── Draw ───────────────────────────────────────────────────
-fn draw_game(state: &GameState) {
-    clear_background(BLACK);
+fn draw_game(state: &GameState, _offset: Vec2) {
+    clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
+
+    // Push camera to center the map
+    let cam = Camera2D {
+        target: vec2(MAP_W as f32 * TILE / 2.0, MAP_H as f32 * TILE / 2.0),
+        zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
+        offset: vec2(0.0, 0.0),
+        ..Default::default()
+    };
+    set_camera(&cam);
 
     // Draw map
     for ty in 0..MAP_H {
@@ -638,6 +937,9 @@ fn draw_game(state: &GameState) {
         let alpha = (d.life * 2.0).min(1.0);
         draw_text(&d.value.to_string(), d.x - 8.0, d.y, 20.0, Color::new(1.0, 0.3, 0.1, alpha));
     }
+
+    // Switch back to screen space for HUD
+    set_default_camera();
 
     // ── HUD ────────────────────────────────────────────────
     let hud_y = screen_height() - 45.0;
@@ -685,8 +987,8 @@ fn draw_game(state: &GameState) {
     if state.wave == 0 && state.wave_delay > 0.5 {
         draw_text_centered("Get Ready!", screen_width() / 2.0, screen_height() / 2.0 - 40.0, 40.0,
             Color::new(1.0, 1.0, 0.5, 1.0));
-        draw_text_centered("WASD to move, Mouse to aim & shoot", screen_width() / 2.0, screen_height() / 2.0 + 10.0,
-            22.0, GRAY);
+        draw_text_centered("WASD - ruch | Myszka/IJKL - cel | LPM/Spacja - strzal",
+            screen_width() / 2.0, screen_height() / 2.0 + 10.0, 20.0, GRAY);
     }
 
     // No ammo warning
