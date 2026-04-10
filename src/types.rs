@@ -7,8 +7,23 @@ pub const BULLET_SPEED: f32 = 500.0;
 pub const ZOMBIE_BASE_SPEED: f32 = 45.0;
 pub const FIRE_COOLDOWN: f32 = 0.08;
 pub const PICKUP_RANGE: f32 = 40.0;
+pub const ZOMBIE_ATTACK_INTERVAL: f32 = 0.5;
+pub const ZOMBIE_ATTACK_DMG: i32 = 10;
+pub const ZOMBIE_FIRE_ATTACK_DMG: i32 = 20;
 pub const NET_PORT: u16 = 7777;
+pub const DISCOVERY_PORT: u16 = NET_PORT + 1;
 pub const NET_SEND_RATE: f32 = 1.0 / 30.0;
+pub const MAX_PLAYERS: u8 = 2;
+
+pub const MSG_JOIN: u8 = 1;
+pub const MSG_ACCEPT: u8 = 2;
+pub const MSG_INPUT: u8 = 3;
+pub const MSG_STATE: u8 = 4;
+pub const MSG_DISCONNECT: u8 = 5;
+pub const MSG_DISCOVERY_REQ: u8 = 10;
+pub const MSG_DISCOVERY_RESP: u8 = 11;
+pub const MSG_PING: u8 = 12;
+pub const MSG_PONG: u8 = 13;
 
 pub const RESOLUTIONS: [(i32, i32); 5] = [
     (800, 608),
@@ -29,7 +44,7 @@ pub const SND_NO_AMMO: u8 = 6;
 
 // ── Enums ─────────────────────────────────────────────────
 #[derive(PartialEq)]
-pub enum Screen { Menu, Lobby, Playing, GameOver }
+pub enum Screen { Menu, Lobby, Browser, Playing, GameOver }
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum NetRole { Solo, Host, Client }
@@ -53,6 +68,7 @@ pub struct Bullet {
 pub struct Zombie {
     pub x: f32, pub y: f32, pub hp: i32, pub max_hp: i32,
     pub alive: bool, pub speed: f32, pub damage_flash: f32, pub variant: u8,
+    pub attack_timer: f32,
 }
 
 pub struct Pickup {
@@ -97,6 +113,18 @@ pub struct GameState {
     pub events: Vec<u8>,
 }
 
+// ── Server Browser ────────────────────────────────────────
+pub struct ServerInfo {
+    pub name: String,
+    pub players: u8,
+    pub max_players: u8,
+    pub wave: u32,
+    pub score: u32,
+    pub addr: std::net::SocketAddr,
+    pub ping_ms: Option<u32>,
+    pub last_seen: f64,
+}
+
 pub struct AppState {
     pub screen: Screen,
     pub game: GameState,
@@ -109,4 +137,9 @@ pub struct AppState {
     pub net_timer: f32,
     pub ip_input: String,
     pub connected: bool,
+    pub servers: Vec<ServerInfo>,
+    pub browser_selected: usize,
+    pub discovery_timer: f32,
+    pub player_slot: u8,
+    pub dedicated: bool,
 }

@@ -39,7 +39,7 @@ pub fn spawn_sparks(particles: &mut Vec<Particle>, x: f32, y: f32) {
 }
 
 // ── Input ─────────────────────────────────────────────────
-pub fn gather_local_input(state: &GameState, is_client: bool) -> LocalInput {
+pub fn gather_local_input(state: &GameState, my_slot: u8) -> LocalInput {
     let mut dx = 0.0f32;
     let mut dy = 0.0f32;
     if is_key_down(KeyCode::W) || is_key_down(KeyCode::Up) { dy -= 1.0; }
@@ -56,7 +56,7 @@ pub fn gather_local_input(state: &GameState, is_client: bool) -> LocalInput {
     };
     let wp = cam.screen_to_world(vec2(mx, my));
 
-    let me = if is_client { &state.player2 } else { &state.player1 };
+    let me = if my_slot == 1 { &state.player2 } else { &state.player1 };
     let angle = (wp.y - me.y).atan2(wp.x - me.x);
 
     let shooting = is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Space);
@@ -192,6 +192,7 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
     for z in &mut state.zombies {
         if !z.alive { continue; }
         z.damage_flash = (z.damage_flash - dt * 5.0).max(0.0);
+        z.attack_timer = (z.attack_timer - dt).max(0.0);
 
         let (tx, ty) = {
             let d1 = if p1_alive { ((p1x - z.x).powi(2) + (p1y - z.y).powi(2)).sqrt() } else { f32::MAX };
@@ -209,23 +210,25 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             if can_move(z.x, ny, 6.0) { z.y = ny; }
         }
 
-        for (player_idx, is_alive) in [(0u8, p1_alive), (1u8, p2_alive)] {
-            let (px, py) = if player_idx == 0 { (p1x, p1y) } else { (p2x, p2y) };
-            let dx = px - z.x;
-            let dy = py - z.y;
-            if dx * dx + dy * dy < 18.0 * 18.0 && is_alive {
-                let player = if player_idx == 0 { &mut state.player1 } else { &mut state.player2 };
-                let dmg = if z.variant == 3 { 2 } else { 1 };
-                player.hp -= dmg;
-                player.damage_flash = 1.0;
-                if player.hp % 10 == 0 {
+        if z.attack_timer <= 0.0 {
+            for (player_idx, is_alive) in [(0u8, p1_alive), (1u8, p2_alive)] {
+                let (px, py) = if player_idx == 0 { (p1x, p1y) } else { (p2x, p2y) };
+                let dx = px - z.x;
+                let dy = py - z.y;
+                if dx * dx + dy * dy < 18.0 * 18.0 && is_alive {
+                    let player = if player_idx == 0 { &mut state.player1 } else { &mut state.player2 };
+                    let dmg = if z.variant == 3 { ZOMBIE_FIRE_ATTACK_DMG } else { ZOMBIE_ATTACK_DMG };
+                    player.hp -= dmg;
+                    player.damage_flash = 1.0;
+                    z.attack_timer = ZOMBIE_ATTACK_INTERVAL;
                     state.events.push(SND_HURT);
-                }
-                if player.hp <= 0 {
-                    player.alive = false;
-                    if !state.player1.alive && (!state.two_player || !state.player2.alive) {
-                        state.game_over = true;
+                    if player.hp <= 0 {
+                        player.alive = false;
+                        if !state.player1.alive && (!state.two_player || !state.player2.alive) {
+                            state.game_over = true;
+                        }
                     }
+                    break;
                 }
             }
         }
@@ -358,18 +361,19 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             let speed = if is_fire { base_speed * 1.3 } else { base_speed };
             state.zombies.push(Zombie {
                 x: sx, y: sy, hp, max_hp: hp, alive: true,
-                speed, damage_flash: 0.0, variant,
+                speed, damage_flash: 0.0, variant, attack_timer: 0.0,
             });
         }
     }
 }
 
 pub fn update_visuals(state: &mut GameState, dt: f32) {
+    let damping = 0.95_f32.powf(dt * 60.0);
     for p in &mut state.particles {
         p.x += p.dx * dt;
         p.y += p.dy * dt;
-        p.dx *= 0.95;
-        p.dy *= 0.95;
+        p.dx *= damping;
+        p.dy *= damping;
         p.life -= dt;
     }
     for f in &mut state.flashes { f.life -= dt; }

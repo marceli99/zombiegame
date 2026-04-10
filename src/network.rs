@@ -75,6 +75,7 @@ pub fn serialize_state(state: &GameState) -> Vec<u8> {
         wb_i32(&mut b, z.hp); wb_i32(&mut b, z.max_hp);
         wb_f32(&mut b, z.speed); wb_f32(&mut b, z.damage_flash);
         wb_u8(&mut b, z.variant); wb_u8(&mut b, if z.alive { 1 } else { 0 });
+        wb_f32(&mut b, z.attack_timer);
     }
 
     wb_u16(&mut b, state.bullets.len() as u16);
@@ -120,6 +121,7 @@ pub fn deserialize_state(data: &[u8], state: &mut GameState) {
             x: r.f32(), y: r.f32(), hp: r.i32(), max_hp: r.i32(),
             speed: r.f32(), damage_flash: r.f32(),
             variant: r.u8(), alive: r.u8() != 0,
+            attack_timer: r.f32(),
         });
     }
 
@@ -156,3 +158,35 @@ pub fn get_local_ip() -> String {
     }
     "?.?.?.?".to_string()
 }
+
+// ── Discovery Protocol ───────────────────────────────────
+pub fn serialize_server_info(name: &str, players: u8, max_players: u8, wave: u32, score: u32, game_port: u16) -> Vec<u8> {
+    let mut b = Vec::with_capacity(64);
+    wb_u8(&mut b, MSG_DISCOVERY_RESP);
+    let name_bytes = name.as_bytes();
+    let name_len = name_bytes.len().min(255);
+    wb_u8(&mut b, name_len as u8);
+    b.extend_from_slice(&name_bytes[..name_len]);
+    wb_u8(&mut b, players);
+    wb_u8(&mut b, max_players);
+    wb_u32(&mut b, wave);
+    wb_u32(&mut b, score);
+    wb_u16(&mut b, game_port);
+    b
+}
+
+pub fn deserialize_server_info(data: &[u8]) -> Option<(String, u8, u8, u32, u32, u16)> {
+    if data.len() < 4 || data[0] != MSG_DISCOVERY_RESP { return None; }
+    let name_len = data[1] as usize;
+    if data.len() < 2 + name_len + 12 { return None; }
+    let name = String::from_utf8_lossy(&data[2..2 + name_len]).to_string();
+    let rest = &data[2 + name_len..];
+    let mut r = BR::new(rest);
+    let players = r.u8();
+    let max_players = r.u8();
+    let wave = r.u32();
+    let score = r.u32();
+    let game_port = r.u16();
+    Some((name, players, max_players, wave, score, game_port))
+}
+

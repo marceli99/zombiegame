@@ -194,14 +194,81 @@ pub fn draw_menu(selected_res: usize) {
         draw_text_centered("[1] Graj SOLO", cx, cy + 20.0, 28.0, Color::new(0.3, 1.0, 0.3, 1.0));
         draw_text_centered("[2] Hostuj gre (LAN)", cx, cy + 55.0, 28.0, Color::new(0.3, 0.8, 1.0, 1.0));
         draw_text_centered("[3] Dolacz do gry (LAN)", cx, cy + 90.0, 28.0, Color::new(1.0, 0.8, 0.3, 1.0));
+        draw_text_centered("[4] Przegladarka serwerow", cx, cy + 125.0, 28.0, Color::new(0.8, 0.3, 1.0, 1.0));
     } else {
         draw_text_centered("[1] Graj SOLO", cx, cy + 20.0, 28.0, Color::new(0.2, 0.7, 0.2, 1.0));
         draw_text_centered("[2] Hostuj gre (LAN)", cx, cy + 55.0, 28.0, Color::new(0.2, 0.6, 0.8, 1.0));
         draw_text_centered("[3] Dolacz do gry (LAN)", cx, cy + 90.0, 28.0, Color::new(0.8, 0.6, 0.2, 1.0));
+        draw_text_centered("[4] Przegladarka serwerow", cx, cy + 125.0, 28.0, Color::new(0.6, 0.2, 0.8, 1.0));
     }
 
-    draw_text_centered("--- Sterowanie ---", cx, cy + 130.0, 20.0, Color::new(0.5, 0.5, 0.5, 1.0));
-    draw_text_centered("WASD - ruch | Myszka - cel | LPM - strzal", cx, cy + 155.0, 18.0, GRAY);
+    draw_text_centered("--- Sterowanie ---", cx, cy + 170.0, 20.0, Color::new(0.5, 0.5, 0.5, 1.0));
+    draw_text_centered("WASD - ruch | Myszka - cel | LPM - strzal", cx, cy + 195.0, 18.0, GRAY);
+}
+
+pub fn draw_server_browser(servers: &[ServerInfo], selected: usize) {
+    clear_background(Color::new(0.08, 0.08, 0.12, 1.0));
+    let cx = screen_width() / 2.0;
+
+    draw_text_centered("PRZEGLADARKA SERWEROW", cx, 50.0, 40.0, Color::new(0.8, 0.3, 1.0, 1.0));
+
+    let header_y = 95.0;
+    let col_name = 40.0;
+    let col_players = 300.0;
+    let col_wave = 400.0;
+    let col_score = 490.0;
+    let col_ping = 580.0;
+    let col_ip = 660.0;
+
+    draw_text("Nazwa", col_name, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+    draw_text("Gracze", col_players, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+    draw_text("Wave", col_wave, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+    draw_text("Score", col_score, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+    draw_text("Ping", col_ping, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+    draw_text("IP", col_ip, header_y, 20.0, Color::new(0.6, 0.6, 0.8, 1.0));
+
+    draw_line(30.0, header_y + 8.0, screen_width() - 30.0, header_y + 8.0, 1.0,
+        Color::new(0.3, 0.3, 0.5, 1.0));
+
+    if servers.is_empty() {
+        let blink = (get_time() * 2.0).sin() > 0.0;
+        if blink {
+            draw_text_centered("Szukam serwerow w sieci LAN...", cx, 200.0, 24.0, GRAY);
+        }
+    } else {
+        for (i, srv) in servers.iter().enumerate() {
+            let y = 125.0 + i as f32 * 30.0;
+            if i == selected {
+                draw_rectangle(30.0, y - 15.0, screen_width() - 60.0, 28.0,
+                    Color::new(0.2, 0.15, 0.35, 0.8));
+            }
+            let color = if i == selected { WHITE } else { Color::new(0.7, 0.7, 0.7, 1.0) };
+            draw_text(&srv.name, col_name, y, 20.0, color);
+            draw_text(&format!("{}/{}", srv.players, srv.max_players), col_players, y, 20.0, color);
+            draw_text(&format!("{}", srv.wave), col_wave, y, 20.0, color);
+            draw_text(&format!("{}", srv.score), col_score, y, 20.0, color);
+            let ping_color = match srv.ping_ms {
+                Some(ms) if ms < 50 => Color::new(0.3, 1.0, 0.3, 1.0),
+                Some(ms) if ms < 100 => Color::new(1.0, 1.0, 0.3, 1.0),
+                Some(_) => Color::new(1.0, 0.3, 0.3, 1.0),
+                None => GRAY,
+            };
+            let ping_str = match srv.ping_ms {
+                Some(ms) => format!("{}ms", ms),
+                None => "?".to_string(),
+            };
+            draw_text(&ping_str, col_ping, y, 20.0, ping_color);
+            draw_text(&format!("{}", srv.addr.ip()), col_ip, y, 18.0,
+                Color::new(0.5, 0.5, 0.5, 1.0));
+        }
+    }
+
+    let footer_y = screen_height() - 40.0;
+    draw_rectangle(0.0, footer_y - 15.0, screen_width(), 55.0, Color::new(0.0, 0.0, 0.0, 0.5));
+    draw_text_centered(
+        "[ENTER] Polacz  [R] Odswiez  [T] Wpisz IP  [ESC] Powrot",
+        cx, footer_y + 10.0, 20.0, GRAY,
+    );
 }
 
 pub fn draw_game(state: &GameState, _offset: Vec2) {
