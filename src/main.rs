@@ -471,6 +471,8 @@ async fn main() {
                             }
                         }
 
+                        // Client-side extrapolation for smooth 60fps rendering
+                        client_extrapolate(&mut app.game, &local_input, app.player_slot, dt);
                         update_visuals(&mut app.game, dt);
                     }
                 }

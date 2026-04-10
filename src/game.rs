@@ -367,6 +367,78 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
     }
 }
 
+// ── Client-side extrapolation (smooth rendering between server updates) ──
+pub fn client_extrapolate(state: &mut GameState, local_input: &LocalInput, my_slot: u8, dt: f32) {
+    // Move local player based on input (instant response)
+    let player = if my_slot == 1 { &mut state.player2 } else { &mut state.player1 };
+    if player.alive {
+        let mut dx = local_input.dx;
+        let mut dy = local_input.dy;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len > 0.0 {
+            dx /= len;
+            dy /= len;
+            let nx = player.x + dx * PLAYER_SPEED * dt;
+            let ny = player.y + dy * PLAYER_SPEED * dt;
+            if can_move(nx, player.y, 6.0) { player.x = nx; }
+            if can_move(player.x, ny, 6.0) { player.y = ny; }
+        }
+        player.angle = local_input.angle;
+        player.damage_flash = (player.damage_flash - dt * 5.0).max(0.0);
+    }
+
+    // Move remote player damage flash
+    let other = if my_slot == 1 { &mut state.player1 } else { &mut state.player2 };
+    other.damage_flash = (other.damage_flash - dt * 5.0).max(0.0);
+
+    // Extrapolate bullets
+    for b in &mut state.bullets {
+        if !b.alive { continue; }
+        b.x += b.dx * dt;
+        b.y += b.dy * dt;
+        if is_solid(tile_at(b.x, b.y)) {
+            b.alive = false;
+            spawn_sparks(&mut state.particles, b.x, b.y);
+            continue;
+        }
+        if b.x < 0.0 || b.x > MAP_W as f32 * TILE || b.y < 0.0 || b.y > MAP_H as f32 * TILE {
+            b.alive = false;
+        }
+    }
+    state.bullets.retain(|b| b.alive);
+
+    // Extrapolate zombies toward closest player
+    let p1_alive = state.player1.alive;
+    let p2_alive = state.two_player && state.player2.alive;
+    let p1x = state.player1.x;
+    let p1y = state.player1.y;
+    let p2x = state.player2.x;
+    let p2y = state.player2.y;
+
+    for z in &mut state.zombies {
+        if !z.alive { continue; }
+        z.damage_flash = (z.damage_flash - dt * 5.0).max(0.0);
+
+        let (tx, ty) = {
+            let d1 = if p1_alive { ((p1x - z.x).powi(2) + (p1y - z.y).powi(2)).sqrt() } else { f32::MAX };
+            let d2 = if p2_alive { ((p2x - z.x).powi(2) + (p2y - z.y).powi(2)).sqrt() } else { f32::MAX };
+            if d1 <= d2 { (p1x, p1y) } else { (p2x, p2y) }
+        };
+
+        let to_x = tx - z.x;
+        let to_y = ty - z.y;
+        let dist = (to_x * to_x + to_y * to_y).sqrt();
+        if dist > 1.0 {
+            let nx = z.x + (to_x / dist) * z.speed * dt;
+            let ny = z.y + (to_y / dist) * z.speed * dt;
+            if can_move(nx, z.y, 6.0) { z.x = nx; }
+            if can_move(z.x, ny, 6.0) { z.y = ny; }
+        }
+    }
+
+    state.screen_shake = (state.screen_shake - dt * 30.0).max(0.0);
+}
+
 pub fn update_visuals(state: &mut GameState, dt: f32) {
     let damping = 0.95_f32.powf(dt * 60.0);
     for p in &mut state.particles {
