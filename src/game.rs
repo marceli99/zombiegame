@@ -70,7 +70,7 @@ pub fn new_player(x: f32, y: f32) -> Player {
         x, y, angle: 0.0,
         hp: 100, max_hp: 100,
         fire_timer: 0.0, damage_flash: 0.0,
-        ammo: 60, alive: true,
+        ammo: 999, alive: true,
     }
 }
 

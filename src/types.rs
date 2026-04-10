@@ -3,7 +3,7 @@ use macroquad::prelude::*;
 // ── Constants ─────────────────────────────────────────────
 pub const TILE: f32 = 32.0;
 pub const PLAYER_SPEED: f32 = 150.0;
-pub const BULLET_SPEED: f32 = 500.0;
+pub const BULLET_SPEED: f32 = 1000.0;
 pub const ZOMBIE_BASE_SPEED: f32 = 45.0;
 pub const FIRE_COOLDOWN: f32 = 0.08;
 pub const PICKUP_RANGE: f32 = 40.0;
