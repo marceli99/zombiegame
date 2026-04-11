@@ -56,7 +56,7 @@ fn deserialize_player(r: &mut BR) -> Player {
 
 pub fn serialize_state(state: &GameState) -> Vec<u8> {
     let mut b = Vec::with_capacity(4096);
-    wb_u8(&mut b, 4);
+    wb_u8(&mut b, MSG_STATE);
     wb_f32(&mut b, state.time);
     wb_u32(&mut b, state.wave);
     wb_u32(&mut b, state.score);
@@ -66,8 +66,10 @@ pub fn serialize_state(state: &GameState) -> Vec<u8> {
     wb_f32(&mut b, state.wave_delay);
     wb_u32(&mut b, state.zombies_to_spawn);
 
-    serialize_player(&mut b, &state.player1);
-    serialize_player(&mut b, &state.player2);
+    wb_u8(&mut b, state.num_players);
+    for p in &state.players {
+        serialize_player(&mut b, p);
+    }
 
     wb_u16(&mut b, state.zombies.len() as u16);
     for z in &state.zombies {
@@ -111,8 +113,12 @@ pub fn deserialize_state(data: &[u8], state: &mut GameState) {
     state.wave_delay = r.f32();
     state.zombies_to_spawn = r.u32();
 
-    state.player1 = deserialize_player(&mut r);
-    state.player2 = deserialize_player(&mut r);
+    let np = r.u8();
+    state.num_players = np;
+    state.players.clear();
+    for _ in 0..np {
+        state.players.push(deserialize_player(&mut r));
+    }
 
     let nz = r.u16() as usize;
     state.zombies.clear();
@@ -134,9 +140,9 @@ pub fn deserialize_state(data: &[u8], state: &mut GameState) {
         });
     }
 
-    let np = r.u16() as usize;
+    let npk = r.u16() as usize;
     state.pickups.clear();
-    for _ in 0..np {
+    for _ in 0..npk {
         state.pickups.push(Pickup {
             x: r.f32(), y: r.f32(),
             kind: if r.u8() == 0 { PickupKind::Health } else { PickupKind::Ammo },
@@ -152,6 +158,12 @@ pub fn deserialize_state(data: &[u8], state: &mut GameState) {
 pub fn get_local_ip() -> String {
     if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
         let _ = sock.connect("8.8.8.8:80");
+        if let Ok(addr) = sock.local_addr() {
+            return addr.ip().to_string();
+        }
+    }
+    if let Ok(sock) = UdpSocket::bind("[::]:0") {
+        let _ = sock.connect("[2001:4860:4860::8888]:80");
         if let Ok(addr) = sock.local_addr() {
             return addr.ip().to_string();
         }
@@ -190,3 +202,23 @@ pub fn deserialize_server_info(data: &[u8]) -> Option<(String, u8, u8, u32, u32,
     Some((name, players, max_players, wave, score, game_port))
 }
 
+// ── Lobby Protocol ───────────────────────────────────────
+pub fn build_lobby_state(slots: &[(bool, bool); 4]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(9);
+    b.push(MSG_LOBBY_STATE);
+    for &(connected, ready) in slots {
+        b.push(if connected { 1 } else { 0 });
+        b.push(if ready { 1 } else { 0 });
+    }
+    b
+}
+
+pub fn parse_lobby_state(data: &[u8]) -> [(bool, bool); 4] {
+    let mut slots = [(false, false); 4];
+    if data.len() >= 9 && data[0] == MSG_LOBBY_STATE {
+        for i in 0..4 {
+            slots[i] = (data[1 + i * 2] != 0, data[2 + i * 2] != 0);
+        }
+    }
+    slots
+}

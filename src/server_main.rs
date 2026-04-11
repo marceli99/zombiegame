@@ -14,6 +14,7 @@ use game::*;
 struct ClientSlot {
     addr: std::net::SocketAddr,
     input: RemoteInput,
+    ready: bool,
     last_seen: Instant,
 }
 
@@ -45,12 +46,14 @@ fn main() {
     let seed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     macroquad::rand::srand(seed);
 
-    let game_sock = UdpSocket::bind(format!("0.0.0.0:{}", port))
+    let game_sock = UdpSocket::bind(format!("[::]:{}", port))
+        .or_else(|_| UdpSocket::bind(format!("0.0.0.0:{}", port)))
         .expect("Failed to bind game socket");
     game_sock.set_nonblocking(true).ok();
 
     let disc_port = port + 1;
-    let disc_sock = UdpSocket::bind(format!("0.0.0.0:{}", disc_port))
+    let disc_sock = UdpSocket::bind(format!("[::]:{}", disc_port))
+        .or_else(|_| UdpSocket::bind(format!("0.0.0.0:{}", disc_port)))
         .expect("Failed to bind discovery socket");
     disc_sock.set_nonblocking(true).ok();
     disc_sock.set_broadcast(true).ok();
@@ -60,15 +63,17 @@ fn main() {
     println!("Game port: {}", port);
     println!("Discovery port: {}", disc_port);
     println!("IP: {}", get_local_ip());
+    println!("Max players: {}", MAX_PLAYERS);
     println!("Waiting for players...");
 
-    let mut state = new_game(true);
-    let mut clients: [Option<ClientSlot>; 2] = [None, None];
+    let mut state = new_game(1);
+    let mut clients: [Option<ClientSlot>; 4] = [None, None, None, None];
     let mut recv_buf = [0u8; 65536];
     let mut last_tick = Instant::now();
     let mut net_timer = 0.0f32;
     let mut game_started = false;
     let mut restart_timer = 0.0f32;
+    let mut lobby_timer = 0.0f32;
 
     loop {
         let now = Instant::now();
@@ -102,11 +107,12 @@ fn main() {
                     match recv_buf[0] {
                         MSG_JOIN => {
                             let mut assigned = None;
-                            for slot in 0..2usize {
+                            for slot in 0..4usize {
                                 if clients[slot].is_none() {
                                     clients[slot] = Some(ClientSlot {
                                         addr,
                                         input: RemoteInput::default(),
+                                        ready: false,
                                         last_seen: Instant::now(),
                                     });
                                     assigned = Some(slot);
@@ -116,19 +122,13 @@ fn main() {
                             if let Some(slot) = assigned {
                                 let _ = game_sock.send_to(&[MSG_ACCEPT, slot as u8], addr);
                                 println!("Player joined slot {} from {}", slot, addr);
-                                if !game_started {
-                                    state = new_game(true);
-                                    game_started = true;
-                                    restart_timer = 0.0;
-                                    println!("Game started!");
-                                }
                             } else {
                                 let _ = game_sock.send_to(&[MSG_DISCONNECT], addr);
                                 println!("Rejected {} (server full)", addr);
                             }
                         }
                         MSG_INPUT if n > 1 => {
-                            for slot in 0..2usize {
+                            for slot in 0..4usize {
                                 if let Some(ref mut c) = clients[slot] {
                                     if c.addr == addr {
                                         c.input = deserialize_input(&recv_buf[..n]);
@@ -138,8 +138,20 @@ fn main() {
                                 }
                             }
                         }
+                        MSG_READY => {
+                            for slot in 0..4usize {
+                                if let Some(ref mut c) = clients[slot] {
+                                    if c.addr == addr {
+                                        c.ready = !c.ready;
+                                        c.last_seen = Instant::now();
+                                        println!("Player slot {} ready: {}", slot, c.ready);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         MSG_DISCONNECT => {
-                            for slot in 0..2usize {
+                            for slot in 0..4usize {
                                 if let Some(ref c) = clients[slot] {
                                     if c.addr == addr {
                                         println!("Player disconnected from slot {}", slot);
@@ -161,7 +173,7 @@ fn main() {
         }
 
         // Timeout
-        for slot in 0..2usize {
+        for slot in 0..4usize {
             if let Some(ref c) = clients[slot] {
                 if c.last_seen.elapsed().as_secs() > 10 {
                     println!("Player in slot {} timed out", slot);
@@ -171,40 +183,83 @@ fn main() {
         }
 
         let player_count = clients.iter().filter(|c| c.is_some()).count();
+
+        if !game_started {
+            // Lobby phase - broadcast lobby state
+            lobby_timer += dt;
+            if lobby_timer >= NET_SEND_RATE {
+                lobby_timer = 0.0;
+                let mut slots = [(false, false); 4];
+                for s in 0..4 {
+                    if let Some(ref c) = clients[s] {
+                        slots[s] = (true, c.ready);
+                    }
+                }
+                let lobby_data = build_lobby_state(&slots);
+                for slot in 0..4usize {
+                    if let Some(ref c) = clients[slot] {
+                        let _ = game_sock.send_to(&lobby_data, c.addr);
+                    }
+                }
+            }
+
+            // Check if all connected players are ready
+            if player_count > 0 {
+                let all_ready = clients.iter().all(|c| match c {
+                    Some(c) => c.ready,
+                    None => true,
+                });
+                if all_ready {
+                    let num = player_count as u8;
+                    state = new_game(num);
+                    game_started = true;
+                    restart_timer = 0.0;
+                    // Send game start to all clients
+                    for slot in 0..4usize {
+                        if let Some(ref c) = clients[slot] {
+                            let _ = game_sock.send_to(&[MSG_GAME_START, num], c.addr);
+                        }
+                    }
+                    println!("Game started with {} players!", num);
+                }
+            }
+        }
+
         if game_started && player_count == 0 {
             game_started = false;
-            state = new_game(true);
+            state = new_game(1);
             println!("All players left. Waiting...");
         }
 
         if game_started {
-            let p1_input = if let Some(ref c) = clients[0] {
-                LocalInput {
-                    dx: c.input.dx, dy: c.input.dy,
-                    angle: c.input.angle, shooting: c.input.shooting,
+            // Build inputs - map connected clients to sequential player slots
+            let mut inputs = vec![RemoteInput::default(); state.num_players as usize];
+            let mut input_idx = 0;
+            for slot in 0..4usize {
+                if let Some(ref c) = clients[slot] {
+                    if input_idx < inputs.len() {
+                        inputs[input_idx] = c.input.clone();
+                    }
+                    input_idx += 1;
                 }
-            } else {
-                LocalInput { dx: 0.0, dy: 0.0, angle: 0.0, shooting: false }
-            };
-
-            let p2_input = if let Some(ref c) = clients[1] {
-                RemoteInput {
-                    dx: c.input.dx, dy: c.input.dy,
-                    angle: c.input.angle, shooting: c.input.shooting,
-                }
-            } else {
-                RemoteInput::default()
-            };
+            }
 
             state.time += dt;
-            update_game(&mut state, &p1_input, &p2_input, dt);
+            update_game(&mut state, &inputs, dt);
 
             if state.game_over {
                 restart_timer += dt;
                 if restart_timer >= 10.0 {
-                    println!("Restarting game...");
-                    state = new_game(true);
+                    println!("Restarting game - returning to lobby...");
+                    game_started = false;
+                    state = new_game(1);
                     restart_timer = 0.0;
+                    // Reset ready states
+                    for slot in 0..4usize {
+                        if let Some(ref mut c) = clients[slot] {
+                            c.ready = false;
+                        }
+                    }
                 }
             }
 
@@ -212,7 +267,7 @@ fn main() {
             if net_timer >= NET_SEND_RATE {
                 net_timer = 0.0;
                 let data = serialize_state(&state);
-                for slot in 0..2usize {
+                for slot in 0..4usize {
                     if let Some(ref c) = clients[slot] {
                         let _ = game_sock.send_to(&data, c.addr);
                     }

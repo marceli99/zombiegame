@@ -7,6 +7,33 @@ pub fn draw_text_centered(text: &str, x: f32, y: f32, font_size: f32, color: Col
     draw_text(text, x - dims.width / 2.0, y, font_size, color);
 }
 
+fn player_body_color(slot: usize, flash: f32) -> Color {
+    match slot {
+        0 => Color::new(0.2 + flash, 0.35, 0.6, 1.0),
+        1 => Color::new(0.2 + flash, 0.6, 0.35, 1.0),
+        2 => Color::new(0.55 + flash, 0.2, 0.5, 1.0),
+        _ => Color::new(0.7 + flash, 0.45, 0.15, 1.0),
+    }
+}
+
+fn player_label_color(slot: usize) -> Color {
+    match slot {
+        0 => Color::new(0.3, 0.5, 0.9, 0.8),
+        1 => Color::new(0.3, 0.9, 0.5, 0.8),
+        2 => Color::new(0.8, 0.3, 0.75, 0.8),
+        _ => Color::new(0.9, 0.6, 0.2, 0.8),
+    }
+}
+
+fn bullet_colors(owner: u8) -> (Color, Color) {
+    match owner {
+        0 => (YELLOW, Color::new(1.0, 1.0, 0.5, 0.5)),
+        1 => (Color::new(0.3, 1.0, 0.5, 1.0), Color::new(0.3, 1.0, 0.5, 0.3)),
+        2 => (Color::new(0.8, 0.4, 1.0, 1.0), Color::new(0.8, 0.4, 1.0, 0.3)),
+        _ => (Color::new(1.0, 0.6, 0.2, 1.0), Color::new(1.0, 0.6, 0.2, 0.3)),
+    }
+}
+
 pub fn draw_tile(tx: usize, ty: usize, time: f32) {
     let x = tx as f32 * TILE;
     let y = ty as f32 * TILE;
@@ -66,18 +93,14 @@ pub fn draw_tile(tx: usize, ty: usize, time: f32) {
     }
 }
 
-pub fn draw_player_sprite(p: &Player, time: f32, is_p2: bool) {
+pub fn draw_player_sprite(p: &Player, time: f32, slot: usize) {
     if !p.alive { return; }
     let bob = (time * 8.0).sin() * 1.5;
     let flash = if p.damage_flash > 0.0 { 0.5 } else { 0.0 };
 
     draw_ellipse(p.x, p.y + 12.0, 10.0, 4.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.3));
 
-    let body_color = if is_p2 {
-        Color::new(0.2 + flash, 0.6, 0.35, 1.0)
-    } else {
-        Color::new(0.2 + flash, 0.35, 0.6, 1.0)
-    };
+    let body_color = player_body_color(slot, flash);
     draw_rectangle(p.x - 7.0, p.y - 8.0 + bob, 14.0, 16.0, body_color);
 
     let head_color = Color::new(0.85 + flash, 0.72, 0.58, 1.0);
@@ -93,14 +116,10 @@ pub fn draw_player_sprite(p: &Player, time: f32, is_p2: bool) {
     draw_line(p.x + 4.0, p.y - 2.0 + bob, p.x + gx, p.y + gy, 3.0, Color::new(0.3, 0.3, 0.3, 1.0));
     draw_rectangle(p.x + gx - 2.0, p.y + gy - 2.0, 5.0, 5.0, Color::new(0.25, 0.25, 0.28, 1.0));
 
-    let label = if is_p2 { "P2" } else { "P1" };
-    let label_color = if is_p2 {
-        Color::new(0.3, 0.9, 0.5, 0.8)
-    } else {
-        Color::new(0.3, 0.5, 0.9, 0.8)
-    };
-    let dims = measure_text(label, None, 14, 1.0);
-    draw_text(label, p.x - dims.width / 2.0, p.y - 22.0, 14.0, label_color);
+    let label = format!("P{}", slot + 1);
+    let label_color = player_label_color(slot);
+    let dims = measure_text(&label, None, 14, 1.0);
+    draw_text(&label, p.x - dims.width / 2.0, p.y - 22.0, 14.0, label_color);
 }
 
 pub fn draw_zombie(z: &Zombie, time: f32) {
@@ -110,10 +129,13 @@ pub fn draw_zombie(z: &Zombie, time: f32) {
     draw_ellipse(z.x, z.y + 12.0, 9.0, 4.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.3));
 
     let is_fire = z.variant == 3;
+    let is_explosive = z.variant == 4;
+
     let (body_r, body_g) = match z.variant {
         0 => (0.35 + flash, 0.55),
         1 => (0.50 + flash, 0.45),
         3 => (0.85 + flash, 0.30),
+        4 => (0.50 + flash, 0.80),
         _ => (0.30 + flash, 0.50),
     };
 
@@ -124,20 +146,31 @@ pub fn draw_zombie(z: &Zombie, time: f32) {
         draw_circle(z.x, z.y - 4.0 + bob, 14.0 + flicker1 * 4.0, Color::new(1.0, 0.4, 0.0, 0.15));
         draw_circle(z.x - 3.0, z.y - 10.0 + bob, 6.0 + flicker2 * 3.0, Color::new(1.0, 0.6, 0.0, 0.25));
         draw_circle(z.x + 4.0, z.y - 12.0 + bob, 5.0 + flicker1 * 2.0, Color::new(1.0, 0.3, 0.0, 0.2));
-        // Flame tips above head
         let tip_y = z.y - 18.0 + bob - flicker1 * 5.0;
         draw_rectangle(z.x - 2.0, tip_y, 4.0, 6.0, Color::new(1.0, 0.8, 0.0, 0.4 * flicker2));
         draw_rectangle(z.x + 3.0, tip_y + 2.0, 3.0, 4.0, Color::new(1.0, 0.5, 0.0, 0.3 * flicker1));
         draw_rectangle(z.x - 5.0, tip_y + 3.0, 3.0, 3.0, Color::new(1.0, 0.6, 0.1, 0.3 * flicker2));
     }
 
-    let body_b = if is_fire { 0.05 } else { 0.2 };
+    // Explosive zombie toxic aura
+    if is_explosive {
+        let pulse = ((time * 8.0 + z.x * 0.2).sin() + 1.0) * 0.5;
+        draw_circle(z.x, z.y + bob, 16.0 + pulse * 4.0, Color::new(0.4, 0.9, 0.0, 0.12));
+        draw_circle(z.x, z.y - 6.0 + bob, 12.0 + pulse * 3.0, Color::new(0.6, 1.0, 0.0, 0.18));
+        if pulse > 0.7 {
+            draw_circle(z.x, z.y + bob, 22.0, Color::new(1.0, 0.9, 0.0, 0.08));
+        }
+    }
+
+    let body_b = if is_fire { 0.05 } else if is_explosive { 0.1 } else { 0.2 };
     draw_rectangle(z.x - 7.0, z.y - 6.0 + bob, 14.0, 14.0, Color::new(body_r, body_g, body_b, 1.0));
     draw_rectangle(z.x - 6.0, z.y - 14.0 + bob, 12.0, 10.0, Color::new(body_r - 0.05, body_g + 0.05, body_b + 0.02, 1.0));
 
     let glow = ((time * 5.0).sin() + 1.0) * 0.15;
     let eye_color = if is_fire {
         Color::new(1.0, 0.8 + glow, 0.0, 1.0)
+    } else if is_explosive {
+        Color::new(0.5 + glow, 1.0, 0.0, 1.0)
     } else {
         Color::new(0.9 + glow, 0.15, 0.1, 1.0)
     };
@@ -148,11 +181,25 @@ pub fn draw_zombie(z: &Zombie, time: f32) {
     draw_rectangle(z.x - 11.0 + arm_sway, z.y - 4.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, body_b, 1.0));
     draw_rectangle(z.x + 7.0 - arm_sway, z.y - 2.0 + bob, 5.0, 4.0, Color::new(body_r, body_g, body_b, 1.0));
 
+    // Explosive zombie warning symbol
+    if is_explosive {
+        let blink = ((time * 6.0).sin() + 1.0) * 0.5;
+        if blink > 0.3 {
+            draw_text("!", z.x - 2.0, z.y - 18.0 + bob, 14.0, Color::new(1.0, 0.9, 0.0, blink));
+        }
+    }
+
     if z.hp < z.max_hp {
         let bar_w = 18.0;
         let ratio = z.hp as f32 / z.max_hp as f32;
-        draw_rectangle(z.x - bar_w / 2.0, z.y - 20.0, bar_w, 3.0, Color::new(0.2, 0.0, 0.0, 0.8));
-        draw_rectangle(z.x - bar_w / 2.0, z.y - 20.0, bar_w * ratio, 3.0, Color::new(0.8, 0.1, 0.1, 0.9));
+        let bar_y = if is_explosive { z.y - 24.0 } else { z.y - 20.0 };
+        draw_rectangle(z.x - bar_w / 2.0, bar_y, bar_w, 3.0, Color::new(0.2, 0.0, 0.0, 0.8));
+        let bar_color = if is_explosive {
+            Color::new(0.4, 0.9, 0.1, 0.9)
+        } else {
+            Color::new(0.8, 0.1, 0.1, 0.9)
+        };
+        draw_rectangle(z.x - bar_w / 2.0, bar_y, bar_w * ratio, 3.0, bar_color);
     }
 }
 
@@ -192,12 +239,12 @@ pub fn draw_menu(selected_res: usize) {
     let blink = (get_time() * 3.0).sin() > 0.0;
     if blink {
         draw_text_centered("[1] Graj SOLO", cx, cy + 20.0, 28.0, Color::new(0.3, 1.0, 0.3, 1.0));
-        draw_text_centered("[2] Hostuj gre (LAN)", cx, cy + 55.0, 28.0, Color::new(0.3, 0.8, 1.0, 1.0));
+        draw_text_centered("[2] Hostuj gre (LAN, do 4 graczy)", cx, cy + 55.0, 28.0, Color::new(0.3, 0.8, 1.0, 1.0));
         draw_text_centered("[3] Dolacz do gry (LAN)", cx, cy + 90.0, 28.0, Color::new(1.0, 0.8, 0.3, 1.0));
         draw_text_centered("[4] Przegladarka serwerow", cx, cy + 125.0, 28.0, Color::new(0.8, 0.3, 1.0, 1.0));
     } else {
         draw_text_centered("[1] Graj SOLO", cx, cy + 20.0, 28.0, Color::new(0.2, 0.7, 0.2, 1.0));
-        draw_text_centered("[2] Hostuj gre (LAN)", cx, cy + 55.0, 28.0, Color::new(0.2, 0.6, 0.8, 1.0));
+        draw_text_centered("[2] Hostuj gre (LAN, do 4 graczy)", cx, cy + 55.0, 28.0, Color::new(0.2, 0.6, 0.8, 1.0));
         draw_text_centered("[3] Dolacz do gry (LAN)", cx, cy + 90.0, 28.0, Color::new(0.8, 0.6, 0.2, 1.0));
         draw_text_centered("[4] Przegladarka serwerow", cx, cy + 125.0, 28.0, Color::new(0.6, 0.2, 0.8, 1.0));
     }
@@ -271,15 +318,67 @@ pub fn draw_server_browser(servers: &[ServerInfo], selected: usize) {
     );
 }
 
+pub fn draw_lobby_ready(slots: &[(bool, bool); 4], my_slot: u8, is_host: bool, ip: &str) {
+    let cx = screen_width() / 2.0;
+    let cy = screen_height() / 2.0;
+
+    if is_host {
+        draw_text_centered("LOBBY - HOSTING", cx, cy - 140.0, 40.0, Color::new(0.3, 0.8, 1.0, 1.0));
+        draw_text_centered(&format!("IP: {}", ip), cx, cy - 100.0, 22.0, GRAY);
+    } else {
+        draw_text_centered("LOBBY", cx, cy - 140.0, 40.0, Color::new(1.0, 0.8, 0.3, 1.0));
+    }
+
+    draw_text_centered("Gracze:", cx, cy - 60.0, 24.0, WHITE);
+
+    for i in 0..4 {
+        let y = cy - 30.0 + i as f32 * 35.0;
+        let (connected, ready) = slots[i];
+        let label = format!("P{}", i + 1);
+        let is_me = i == my_slot as usize;
+
+        let label_col = player_label_color(i);
+        draw_text(&label, cx - 120.0, y, 24.0, if connected { label_col } else { Color::new(0.3, 0.3, 0.3, 0.5) });
+
+        if connected {
+            let status = if ready { "GOTOWY" } else { "..." };
+            let status_color = if ready { Color::new(0.3, 1.0, 0.3, 1.0) } else { Color::new(0.8, 0.8, 0.3, 1.0) };
+            draw_text(status, cx - 20.0, y, 22.0, status_color);
+            if is_me {
+                draw_text("<- Ty", cx + 80.0, y, 18.0, Color::new(0.5, 0.8, 1.0, 0.8));
+            }
+        } else {
+            draw_text("---", cx - 20.0, y, 22.0, Color::new(0.3, 0.3, 0.3, 0.5));
+        }
+    }
+
+    let ready_text = if slots[my_slot as usize].1 {
+        "[SPACE] Cofnij gotowosc"
+    } else {
+        "[SPACE] Gotowy!"
+    };
+    let blink = (get_time() * 3.0).sin() > 0.0;
+    if blink {
+        draw_text_centered(ready_text, cx, cy + 120.0, 24.0, Color::new(0.3, 1.0, 0.3, 1.0));
+    }
+    draw_text_centered("[ESC] Powrot", cx, cy + 160.0, 20.0, GRAY);
+}
+
+pub fn make_game_camera() -> Camera2D {
+    let map_w = MAP_W as f32 * TILE;
+    let map_h = MAP_H as f32 * TILE;
+    let s = (screen_width() / map_w).min(screen_height() / map_h);
+    Camera2D {
+        target: vec2(map_w / 2.0, map_h / 2.0),
+        zoom: vec2(s * 2.0 / screen_width(), s * 2.0 / screen_height()),
+        ..Default::default()
+    }
+}
+
 pub fn draw_game(state: &GameState, _offset: Vec2) {
     clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
 
-    let cam = Camera2D {
-        target: vec2(MAP_W as f32 * TILE / 2.0, MAP_H as f32 * TILE / 2.0),
-        zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
-        offset: vec2(0.0, 0.0),
-        ..Default::default()
-    };
+    let cam = make_game_camera();
     set_camera(&cam);
 
     for ty in 0..MAP_H {
@@ -295,13 +394,8 @@ pub fn draw_game(state: &GameState, _offset: Vec2) {
     }
 
     for b in &state.bullets {
-        let color = if b.owner == 0 { YELLOW } else { Color::new(0.3, 1.0, 0.5, 1.0) };
+        let (color, trail_color) = bullet_colors(b.owner);
         draw_rectangle(b.x - 2.0, b.y - 2.0, 4.0, 4.0, color);
-        let trail_color = if b.owner == 0 {
-            Color::new(1.0, 1.0, 0.5, 0.5)
-        } else {
-            Color::new(0.3, 1.0, 0.5, 0.3)
-        };
         draw_line(b.x, b.y, b.x - b.dx * 0.02, b.y - b.dy * 0.02, 2.0, trail_color);
     }
 
@@ -312,9 +406,9 @@ pub fn draw_game(state: &GameState, _offset: Vec2) {
 
     for z in &state.zombies { draw_zombie(z, state.time); }
 
-    draw_player_sprite(&state.player1, state.time, false);
-    if state.two_player {
-        draw_player_sprite(&state.player2, state.time, true);
+    let np = state.num_players as usize;
+    for i in 0..np.min(state.players.len()) {
+        draw_player_sprite(&state.players[i], state.time, i);
     }
 
     for d in &state.dmg_numbers {
@@ -329,33 +423,27 @@ pub fn draw_game(state: &GameState, _offset: Vec2) {
     draw_rectangle(0.0, hud_y - 5.0, screen_width(), 50.0, Color::new(0.0, 0.0, 0.0, 0.7));
     draw_rectangle(0.0, hud_y - 5.0, screen_width(), 2.0, Color::new(0.3, 0.3, 0.3, 0.8));
 
-    let hp1_ratio = state.player1.hp as f32 / state.player1.max_hp as f32;
-    let hp1_color = if !state.player1.alive { DARKGRAY }
-        else if hp1_ratio > 0.5 { Color::new(0.2, 0.8, 0.2, 1.0) }
-        else if hp1_ratio > 0.25 { Color::new(0.9, 0.7, 0.1, 1.0) }
-        else { Color::new(0.9, 0.15, 0.1, 1.0) };
-    draw_text("P1", 10.0, hud_y + 20.0, 18.0, Color::new(0.3, 0.5, 0.9, 1.0));
-    draw_rectangle(30.0, hud_y + 8.0, 80.0, 14.0, Color::new(0.2, 0.0, 0.0, 0.8));
-    draw_rectangle(30.0, hud_y + 8.0, 80.0 * hp1_ratio.max(0.0), 14.0, hp1_color);
-    draw_text(&format!("{}", state.player1.ammo), 115.0, hud_y + 22.0, 18.0,
-        Color::new(0.9, 0.85, 0.2, 1.0));
-
-    if state.two_player {
-        let hp2_ratio = state.player2.hp as f32 / state.player2.max_hp as f32;
-        let hp2_color = if !state.player2.alive { DARKGRAY }
-            else if hp2_ratio > 0.5 { Color::new(0.2, 0.8, 0.2, 1.0) }
-            else if hp2_ratio > 0.25 { Color::new(0.9, 0.7, 0.1, 1.0) }
+    let player_hud_width = 130.0;
+    for i in 0..np.min(state.players.len()) {
+        let x_off = 10.0 + i as f32 * player_hud_width;
+        let p = &state.players[i];
+        let hp_ratio = p.hp as f32 / p.max_hp as f32;
+        let hp_color = if !p.alive { DARKGRAY }
+            else if hp_ratio > 0.5 { Color::new(0.2, 0.8, 0.2, 1.0) }
+            else if hp_ratio > 0.25 { Color::new(0.9, 0.7, 0.1, 1.0) }
             else { Color::new(0.9, 0.15, 0.1, 1.0) };
-        draw_text("P2", 150.0, hud_y + 20.0, 18.0, Color::new(0.3, 0.9, 0.5, 1.0));
-        draw_rectangle(170.0, hud_y + 8.0, 80.0, 14.0, Color::new(0.2, 0.0, 0.0, 0.8));
-        draw_rectangle(170.0, hud_y + 8.0, 80.0 * hp2_ratio.max(0.0), 14.0, hp2_color);
-        draw_text(&format!("{}", state.player2.ammo), 255.0, hud_y + 22.0, 18.0,
+        let label = format!("P{}", i + 1);
+        draw_text(&label, x_off, hud_y + 20.0, 18.0, player_label_color(i));
+        draw_rectangle(x_off + 22.0, hud_y + 8.0, 70.0, 14.0, Color::new(0.2, 0.0, 0.0, 0.8));
+        draw_rectangle(x_off + 22.0, hud_y + 8.0, 70.0 * hp_ratio.max(0.0), 14.0, hp_color);
+        draw_text(&format!("{}", p.ammo), x_off + 96.0, hud_y + 22.0, 16.0,
             Color::new(0.9, 0.85, 0.2, 1.0));
     }
 
-    draw_text(&format!("WAVE: {}", state.wave), 350.0, hud_y + 22.0, 20.0, Color::new(0.5, 0.8, 1.0, 1.0));
-    draw_text(&format!("SCORE: {}", state.score), 500.0, hud_y + 22.0, 20.0, Color::new(1.0, 0.85, 0.3, 1.0));
-    draw_text(&format!("KILLS: {}", state.kills), 660.0, hud_y + 22.0, 20.0, Color::new(0.8, 0.5, 0.5, 1.0));
+    let info_x = 10.0 + np as f32 * player_hud_width + 20.0;
+    draw_text(&format!("WAVE: {}", state.wave), info_x, hud_y + 22.0, 20.0, Color::new(0.5, 0.8, 1.0, 1.0));
+    draw_text(&format!("SCORE: {}", state.score), info_x + 130.0, hud_y + 22.0, 20.0, Color::new(1.0, 0.85, 0.3, 1.0));
+    draw_text(&format!("KILLS: {}", state.kills), info_x + 280.0, hud_y + 22.0, 20.0, Color::new(0.8, 0.5, 0.5, 1.0));
 
     if state.wave_delay > 1.0 && state.zombies_to_spawn == 0 && state.zombies.is_empty() && state.wave > 0 {
         draw_text_centered(
@@ -371,21 +459,24 @@ pub fn draw_game(state: &GameState, _offset: Vec2) {
             screen_width() / 2.0, screen_height() / 2.0 + 10.0, 20.0, GRAY);
     }
 
-    let no_ammo = state.player1.ammo == 0 && state.player1.alive;
-    if no_ammo && !state.game_over {
+    // No ammo warning for first player (local in solo/host)
+    if !state.players.is_empty() && state.players[0].ammo == 0 && state.players[0].alive && !state.game_over {
         let blink = (state.time * 6.0).sin() > 0.0;
         if blink {
             draw_text_centered("NO AMMO!", screen_width() / 2.0, 80.0, 24.0, RED);
         }
     }
 
-    let my_hp = state.player1.hp;
-    if my_hp < 30 && my_hp > 0 {
-        let alpha = ((state.time * 4.0).sin() + 1.0) * 0.15;
-        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.8, 0.0, 0.0, alpha));
+    // Low health vignette for first player
+    if !state.players.is_empty() {
+        let my_hp = state.players[0].hp;
+        if my_hp < 30 && my_hp > 0 {
+            let alpha = ((state.time * 4.0).sin() + 1.0) * 0.15;
+            draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.8, 0.0, 0.0, alpha));
+        }
     }
 
-    if state.two_player {
+    if np > 1 {
         draw_text("LAN CO-OP", screen_width() - 100.0, 20.0, 18.0, Color::new(0.5, 0.8, 1.0, 0.6));
     }
 }

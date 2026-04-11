@@ -3,17 +3,19 @@ use macroquad::prelude::*;
 // ── Constants ─────────────────────────────────────────────
 pub const TILE: f32 = 32.0;
 pub const PLAYER_SPEED: f32 = 150.0;
-pub const BULLET_SPEED: f32 = 1000.0;
+pub const BULLET_SPEED: f32 = 500.0;
 pub const ZOMBIE_BASE_SPEED: f32 = 45.0;
 pub const FIRE_COOLDOWN: f32 = 0.08;
 pub const PICKUP_RANGE: f32 = 40.0;
 pub const ZOMBIE_ATTACK_INTERVAL: f32 = 0.5;
 pub const ZOMBIE_ATTACK_DMG: i32 = 10;
 pub const ZOMBIE_FIRE_ATTACK_DMG: i32 = 20;
+pub const ZOMBIE_EXPLOSION_RADIUS: f32 = 80.0;
+pub const ZOMBIE_EXPLOSION_DMG: i32 = 50;
 pub const NET_PORT: u16 = 7777;
 pub const DISCOVERY_PORT: u16 = NET_PORT + 1;
 pub const NET_SEND_RATE: f32 = 1.0 / 30.0;
-pub const MAX_PLAYERS: u8 = 2;
+pub const MAX_PLAYERS: u8 = 4;
 
 pub const MSG_JOIN: u8 = 1;
 pub const MSG_ACCEPT: u8 = 2;
@@ -24,6 +26,9 @@ pub const MSG_DISCOVERY_REQ: u8 = 10;
 pub const MSG_DISCOVERY_RESP: u8 = 11;
 pub const MSG_PING: u8 = 12;
 pub const MSG_PONG: u8 = 13;
+pub const MSG_READY: u8 = 14;
+pub const MSG_LOBBY_STATE: u8 = 15;
+pub const MSG_GAME_START: u8 = 16;
 
 pub const RESOLUTIONS: [(i32, i32); 5] = [
     (800, 608),
@@ -41,6 +46,7 @@ pub const SND_HURT: u8 = 3;
 pub const SND_PICKUP: u8 = 4;
 pub const SND_WAVE: u8 = 5;
 pub const SND_NO_AMMO: u8 = 6;
+pub const SND_EXPLOSION: u8 = 7;
 
 // ── Enums ─────────────────────────────────────────────────
 #[derive(PartialEq)]
@@ -84,7 +90,7 @@ pub struct Particle {
 pub struct MuzzleFlash { pub x: f32, pub y: f32, pub life: f32 }
 pub struct DamageNumber { pub x: f32, pub y: f32, pub value: i32, pub life: f32 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RemoteInput { pub dx: f32, pub dy: f32, pub angle: f32, pub shooting: bool }
 
 pub struct LocalInput {
@@ -92,9 +98,8 @@ pub struct LocalInput {
 }
 
 pub struct GameState {
-    pub player1: Player,
-    pub player2: Player,
-    pub two_player: bool,
+    pub players: Vec<Player>,
+    pub num_players: u8,
     pub bullets: Vec<Bullet>,
     pub zombies: Vec<Zombie>,
     pub pickups: Vec<Pickup>,
@@ -125,6 +130,12 @@ pub struct ServerInfo {
     pub last_seen: f64,
 }
 
+pub struct HostClient {
+    pub addr: std::net::SocketAddr,
+    pub input: RemoteInput,
+    pub ready: bool,
+}
+
 pub struct AppState {
     pub screen: Screen,
     pub game: GameState,
@@ -133,7 +144,6 @@ pub struct AppState {
     pub net_role: NetRole,
     pub socket: Option<std::net::UdpSocket>,
     pub peer_addr: Option<std::net::SocketAddr>,
-    pub remote_input: RemoteInput,
     pub net_timer: f32,
     pub ip_input: String,
     pub connected: bool,
@@ -142,4 +152,8 @@ pub struct AppState {
     pub discovery_timer: f32,
     pub player_slot: u8,
     pub dedicated: bool,
+    // Multiplayer lobby
+    pub host_clients: [Option<HostClient>; 3],
+    pub my_ready: bool,
+    pub lobby_slots: [(bool, bool); 4],
 }

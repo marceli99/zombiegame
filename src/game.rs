@@ -38,6 +38,27 @@ pub fn spawn_sparks(particles: &mut Vec<Particle>, x: f32, y: f32) {
     }
 }
 
+fn spawn_explosion(particles: &mut Vec<Particle>, x: f32, y: f32) {
+    for _ in 0..30 {
+        let angle = rand::gen_range(0.0f32, std::f32::consts::TAU);
+        let speed = rand::gen_range(50.0f32, 200.0);
+        let is_fire = rand::gen_range(0.0f32, 1.0) < 0.6;
+        let color = if is_fire {
+            Color::new(1.0, rand::gen_range(0.3, 0.8), 0.0, 1.0)
+        } else {
+            Color::new(rand::gen_range(0.3, 0.6), rand::gen_range(0.8, 1.0), 0.0, 1.0)
+        };
+        particles.push(Particle {
+            x, y,
+            dx: angle.cos() * speed,
+            dy: angle.sin() * speed,
+            life: rand::gen_range(0.3, 0.8),
+            color,
+            size: rand::gen_range(3.0, 7.0),
+        });
+    }
+}
+
 // ── Input ─────────────────────────────────────────────────
 pub fn gather_local_input(state: &GameState, my_slot: u8) -> LocalInput {
     let mut dx = 0.0f32;
@@ -48,15 +69,18 @@ pub fn gather_local_input(state: &GameState, my_slot: u8) -> LocalInput {
     if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) { dx += 1.0; }
 
     let (mx, my) = mouse_position();
+    let map_w = MAP_W as f32 * TILE;
+    let map_h = MAP_H as f32 * TILE;
+    let s = (screen_width() / map_w).min(screen_height() / map_h);
     let cam = Camera2D {
-        target: vec2(MAP_W as f32 * TILE / 2.0, MAP_H as f32 * TILE / 2.0),
-        zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
-        offset: vec2(0.0, 0.0),
+        target: vec2(map_w / 2.0, map_h / 2.0),
+        zoom: vec2(s * 2.0 / screen_width(), s * 2.0 / screen_height()),
         ..Default::default()
     };
     let wp = cam.screen_to_world(vec2(mx, my));
 
-    let me = if my_slot == 1 { &state.player2 } else { &state.player1 };
+    let slot = my_slot as usize;
+    let me = if slot < state.players.len() { &state.players[slot] } else { &state.players[0] };
     let angle = (wp.y - me.y).atan2(wp.x - me.x);
 
     let shooting = is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Space);
@@ -74,13 +98,22 @@ pub fn new_player(x: f32, y: f32) -> Player {
     }
 }
 
-pub fn new_game(two_player: bool) -> GameState {
+pub fn new_game(num_players: u8) -> GameState {
     let cx = MAP_W as f32 * TILE / 2.0;
     let cy = MAP_H as f32 * TILE / 2.0;
+    let spawn_offsets: [(f32, f32); 4] = [
+        (-30.0, -20.0), (30.0, -20.0),
+        (-30.0,  20.0), (30.0,  20.0),
+    ];
+    let np = (num_players as usize).min(4).max(1);
+    let mut players = Vec::with_capacity(np);
+    for i in 0..np {
+        let (ox, oy) = spawn_offsets[i];
+        players.push(new_player(cx + ox, cy + oy));
+    }
     GameState {
-        player1: new_player(cx - 20.0, cy),
-        player2: new_player(cx + 20.0, cy),
-        two_player,
+        players,
+        num_players: np as u8,
         bullets: Vec::new(),
         zombies: Vec::new(),
         pickups: Vec::new(),
@@ -100,72 +133,52 @@ pub fn new_game(two_player: bool) -> GameState {
     }
 }
 
-// ── Update single player ──────────────────────────────────
-fn update_single_player(
-    p: &mut Player, inp_dx: f32, inp_dy: f32, inp_angle: f32, inp_shooting: bool,
-    bullets: &mut Vec<Bullet>, flashes: &mut Vec<MuzzleFlash>,
-    events: &mut Vec<u8>, owner: u8, dt: f32,
-) {
-    if !p.alive { return; }
-
-    let mut dx = inp_dx;
-    let mut dy = inp_dy;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len > 0.0 {
-        dx /= len;
-        dy /= len;
-        let nx = p.x + dx * PLAYER_SPEED * dt;
-        let ny = p.y + dy * PLAYER_SPEED * dt;
-        if can_move(nx, p.y, 6.0) { p.x = nx; }
-        if can_move(p.x, ny, 6.0) { p.y = ny; }
-    }
-
-    p.angle = inp_angle;
-    p.fire_timer -= dt;
-    p.damage_flash = (p.damage_flash - dt * 5.0).max(0.0);
-
-    if inp_shooting && p.fire_timer <= 0.0 && p.ammo > 0 {
-        p.fire_timer = FIRE_COOLDOWN;
-        p.ammo -= 1;
-        let spread = rand::gen_range(-0.08f32, 0.08);
-        let angle = p.angle + spread;
-        let gx = p.x + angle.cos() * 16.0;
-        let gy = p.y + angle.sin() * 16.0;
-        bullets.push(Bullet {
-            x: gx, y: gy,
-            dx: angle.cos() * BULLET_SPEED,
-            dy: angle.sin() * BULLET_SPEED,
-            alive: true, owner,
-        });
-        flashes.push(MuzzleFlash { x: gx, y: gy, life: 0.06 });
-        events.push(SND_SHOOT);
-    } else if inp_shooting && p.fire_timer <= 0.0 && p.ammo == 0 {
-        p.fire_timer = FIRE_COOLDOWN * 2.0;
-        events.push(SND_NO_AMMO);
-    }
-}
-
 // ── Main update ───────────────────────────────────────────
-pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input: &RemoteInput, dt: f32) {
+pub fn update_game(state: &mut GameState, inputs: &[RemoteInput], dt: f32) {
     state.screen_shake = (state.screen_shake - dt * 30.0).max(0.0);
+    let np = state.num_players as usize;
 
-    update_single_player(
-        &mut state.player1, local_input.dx, local_input.dy,
-        local_input.angle, local_input.shooting,
-        &mut state.bullets, &mut state.flashes,
-        &mut state.events, 0, dt,
-    );
-    if local_input.shooting && state.player1.alive {
-        state.screen_shake = state.screen_shake.max(2.0);
-    }
+    // Update each player
+    for i in 0..np.min(state.players.len()) {
+        let inp = if i < inputs.len() { &inputs[i] } else { &RemoteInput::default() };
+        if !state.players[i].alive { continue; }
 
-    if state.two_player {
-        update_single_player(
-            &mut state.player2, remote_input.dx, remote_input.dy,
-            remote_input.angle, remote_input.shooting,
-            &mut state.bullets, &mut state.flashes,
-            &mut state.events, 1, dt,
-        );
+        let mut pdx = inp.dx;
+        let mut pdy = inp.dy;
+        let len = (pdx * pdx + pdy * pdy).sqrt();
+        if len > 0.0 {
+            pdx /= len;
+            pdy /= len;
+            let nx = state.players[i].x + pdx * PLAYER_SPEED * dt;
+            let ny = state.players[i].y + pdy * PLAYER_SPEED * dt;
+            if can_move(nx, state.players[i].y, 6.0) { state.players[i].x = nx; }
+            if can_move(state.players[i].x, ny, 6.0) { state.players[i].y = ny; }
+        }
+
+        state.players[i].angle = inp.angle;
+        state.players[i].fire_timer -= dt;
+        state.players[i].damage_flash = (state.players[i].damage_flash - dt * 5.0).max(0.0);
+
+        if inp.shooting && state.players[i].fire_timer <= 0.0 && state.players[i].ammo > 0 {
+            state.players[i].fire_timer = FIRE_COOLDOWN;
+            state.players[i].ammo -= 1;
+            let spread = rand::gen_range(-0.08f32, 0.08);
+            let angle = state.players[i].angle + spread;
+            let gx = state.players[i].x + angle.cos() * 16.0;
+            let gy = state.players[i].y + angle.sin() * 16.0;
+            state.bullets.push(Bullet {
+                x: gx, y: gy,
+                dx: angle.cos() * BULLET_SPEED,
+                dy: angle.sin() * BULLET_SPEED,
+                alive: true, owner: i as u8,
+            });
+            state.flashes.push(MuzzleFlash { x: gx, y: gy, life: 0.06 });
+            state.events.push(SND_SHOOT);
+            state.screen_shake = state.screen_shake.max(2.0);
+        } else if inp.shooting && state.players[i].fire_timer <= 0.0 && state.players[i].ammo == 0 {
+            state.players[i].fire_timer = FIRE_COOLDOWN * 2.0;
+            state.events.push(SND_NO_AMMO);
+        }
     }
 
     // Bullets
@@ -183,48 +196,57 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
         }
     }
 
-    // Zombies
-    let p1_alive = state.player1.alive;
-    let p2_alive = state.two_player && state.player2.alive;
-    let p1x = state.player1.x; let p1y = state.player1.y;
-    let p2x = state.player2.x; let p2y = state.player2.y;
+    // Pre-compute player positions for zombie AI
+    let player_data: Vec<(f32, f32, bool)> = (0..np.min(state.players.len()))
+        .map(|i| (state.players[i].x, state.players[i].y, state.players[i].alive))
+        .collect();
 
-    for z in &mut state.zombies {
-        if !z.alive { continue; }
-        z.damage_flash = (z.damage_flash - dt * 5.0).max(0.0);
-        z.attack_timer = (z.attack_timer - dt).max(0.0);
+    // Zombies (index-based for split borrows)
+    for zi in 0..state.zombies.len() {
+        if !state.zombies[zi].alive { continue; }
+        state.zombies[zi].damage_flash = (state.zombies[zi].damage_flash - dt * 5.0).max(0.0);
+        state.zombies[zi].attack_timer = (state.zombies[zi].attack_timer - dt).max(0.0);
 
-        let (tx, ty) = {
-            let d1 = if p1_alive { ((p1x - z.x).powi(2) + (p1y - z.y).powi(2)).sqrt() } else { f32::MAX };
-            let d2 = if p2_alive { ((p2x - z.x).powi(2) + (p2y - z.y).powi(2)).sqrt() } else { f32::MAX };
-            if d1 <= d2 { (p1x, p1y) } else { (p2x, p2y) }
-        };
-
-        let to_x = tx - z.x;
-        let to_y = ty - z.y;
-        let dist = (to_x * to_x + to_y * to_y).sqrt();
-        if dist > 1.0 {
-            let nx = z.x + (to_x / dist) * z.speed * dt;
-            let ny = z.y + (to_y / dist) * z.speed * dt;
-            if can_move(nx, z.y, 6.0) { z.x = nx; }
-            if can_move(z.x, ny, 6.0) { z.y = ny; }
+        // Find closest player
+        let zx = state.zombies[zi].x;
+        let zy = state.zombies[zi].y;
+        let mut min_dist = f32::MAX;
+        let mut tx = zx;
+        let mut ty = zy;
+        for &(px, py, alive) in &player_data {
+            if !alive { continue; }
+            let d = ((px - zx).powi(2) + (py - zy).powi(2)).sqrt();
+            if d < min_dist { min_dist = d; tx = px; ty = py; }
         }
 
-        if z.attack_timer <= 0.0 {
-            for (player_idx, is_alive) in [(0u8, p1_alive), (1u8, p2_alive)] {
-                let (px, py) = if player_idx == 0 { (p1x, p1y) } else { (p2x, p2y) };
-                let dx = px - z.x;
-                let dy = py - z.y;
-                if dx * dx + dy * dy < 18.0 * 18.0 && is_alive {
-                    let player = if player_idx == 0 { &mut state.player1 } else { &mut state.player2 };
-                    let dmg = if z.variant == 3 { ZOMBIE_FIRE_ATTACK_DMG } else { ZOMBIE_ATTACK_DMG };
-                    player.hp -= dmg;
-                    player.damage_flash = 1.0;
-                    z.attack_timer = ZOMBIE_ATTACK_INTERVAL;
+        // Movement
+        let to_x = tx - zx;
+        let to_y = ty - zy;
+        let dist = (to_x * to_x + to_y * to_y).sqrt();
+        if dist > 1.0 {
+            let spd = state.zombies[zi].speed;
+            let nx = zx + (to_x / dist) * spd * dt;
+            let ny = zy + (to_y / dist) * spd * dt;
+            if can_move(nx, zy, 6.0) { state.zombies[zi].x = nx; }
+            let new_zx = state.zombies[zi].x;
+            if can_move(new_zx, ny, 6.0) { state.zombies[zi].y = ny; }
+        }
+
+        // Attack players
+        if state.zombies[zi].attack_timer <= 0.0 {
+            for pi in 0..np.min(state.players.len()) {
+                if !state.players[pi].alive { continue; }
+                let adx = state.players[pi].x - state.zombies[zi].x;
+                let ady = state.players[pi].y - state.zombies[zi].y;
+                if adx * adx + ady * ady < 18.0 * 18.0 {
+                    let dmg = if state.zombies[zi].variant == 3 { ZOMBIE_FIRE_ATTACK_DMG } else { ZOMBIE_ATTACK_DMG };
+                    state.players[pi].hp -= dmg;
+                    state.players[pi].damage_flash = 1.0;
+                    state.zombies[zi].attack_timer = ZOMBIE_ATTACK_INTERVAL;
                     state.events.push(SND_HURT);
-                    if player.hp <= 0 {
-                        player.alive = false;
-                        if !state.player1.alive && (!state.two_player || !state.player2.alive) {
+                    if state.players[pi].hp <= 0 {
+                        state.players[pi].alive = false;
+                        if (0..np.min(state.players.len())).all(|j| !state.players[j].alive) {
                             state.game_over = true;
                         }
                     }
@@ -233,36 +255,35 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             }
         }
 
-        for b in &mut state.bullets {
-            if !b.alive { continue; }
-            let bx = b.x - z.x;
-            let by = b.y - z.y;
+        // Bullet collision
+        for bi in 0..state.bullets.len() {
+            if !state.bullets[bi].alive { continue; }
+            let bx = state.bullets[bi].x - state.zombies[zi].x;
+            let by = state.bullets[bi].y - state.zombies[zi].y;
             if bx * bx + by * by < 144.0 {
-                b.alive = false;
+                state.bullets[bi].alive = false;
                 let dmg = rand::gen_range(20, 35);
-                z.hp -= dmg;
-                z.damage_flash = 1.0;
-                spawn_blood(&mut state.particles, z.x, z.y, 6);
+                state.zombies[zi].hp -= dmg;
+                state.zombies[zi].damage_flash = 1.0;
+                let zpos_x = state.zombies[zi].x;
+                let zpos_y = state.zombies[zi].y;
+                spawn_blood(&mut state.particles, zpos_x, zpos_y, 6);
                 state.dmg_numbers.push(DamageNumber {
-                    x: z.x + rand::gen_range(-5.0, 5.0),
-                    y: z.y - 20.0,
+                    x: zpos_x + rand::gen_range(-5.0, 5.0),
+                    y: zpos_y - 20.0,
                     value: dmg, life: 0.8,
                 });
                 state.events.push(SND_ZOMBIE_HIT);
-                if z.hp <= 0 {
-                    z.alive = false;
-                    spawn_blood(&mut state.particles, z.x, z.y, 15);
+                if state.zombies[zi].hp <= 0 {
+                    state.zombies[zi].alive = false;
+                    spawn_blood(&mut state.particles, zpos_x, zpos_y, 15);
                     state.score += 10 * state.wave;
                     state.kills += 1;
                     state.events.push(SND_ZOMBIE_DEATH);
                     if rand::gen_range(0.0f32, 1.0) < 0.25 {
-                        let kind = if rand::gen_range(0.0f32, 1.0) < 0.4 {
-                            PickupKind::Health
-                        } else {
-                            PickupKind::Ammo
-                        };
+                        let kind = if rand::gen_range(0.0f32, 1.0) < 0.4 { PickupKind::Health } else { PickupKind::Ammo };
                         state.pickups.push(Pickup {
-                            x: z.x, y: z.y, kind, alive: true, timer: 30.0,
+                            x: zpos_x, y: zpos_y, kind, alive: true, timer: 30.0,
                         });
                     }
                 }
@@ -271,25 +292,77 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
         }
     }
 
+    // Explosive zombie detonation (variant 4)
+    let explosions: Vec<(f32, f32)> = state.zombies.iter()
+        .filter(|z| !z.alive && z.variant == 4)
+        .map(|z| (z.x, z.y))
+        .collect();
+
+    for &(ex, ey) in &explosions {
+        // Damage nearby zombies
+        for z in &mut state.zombies {
+            if !z.alive { continue; }
+            let ddx = z.x - ex;
+            let ddy = z.y - ey;
+            if ddx * ddx + ddy * ddy < ZOMBIE_EXPLOSION_RADIUS * ZOMBIE_EXPLOSION_RADIUS {
+                z.hp -= ZOMBIE_EXPLOSION_DMG;
+                z.damage_flash = 1.0;
+                spawn_blood(&mut state.particles, z.x, z.y, 6);
+                state.dmg_numbers.push(DamageNumber {
+                    x: z.x + rand::gen_range(-5.0, 5.0),
+                    y: z.y - 20.0,
+                    value: ZOMBIE_EXPLOSION_DMG, life: 0.8,
+                });
+                if z.hp <= 0 {
+                    z.alive = false;
+                    spawn_blood(&mut state.particles, z.x, z.y, 15);
+                    state.score += 10 * state.wave;
+                    state.kills += 1;
+                    state.events.push(SND_ZOMBIE_DEATH);
+                }
+            }
+        }
+        // Damage nearby players
+        for pi in 0..np.min(state.players.len()) {
+            if !state.players[pi].alive { continue; }
+            let ddx = state.players[pi].x - ex;
+            let ddy = state.players[pi].y - ey;
+            if ddx * ddx + ddy * ddy < ZOMBIE_EXPLOSION_RADIUS * ZOMBIE_EXPLOSION_RADIUS {
+                state.players[pi].hp -= ZOMBIE_EXPLOSION_DMG;
+                state.players[pi].damage_flash = 1.0;
+                state.events.push(SND_HURT);
+                if state.players[pi].hp <= 0 {
+                    state.players[pi].alive = false;
+                    if (0..np.min(state.players.len())).all(|j| !state.players[j].alive) {
+                        state.game_over = true;
+                    }
+                }
+            }
+        }
+        spawn_explosion(&mut state.particles, ex, ey);
+        state.screen_shake = state.screen_shake.max(8.0);
+        state.events.push(SND_EXPLOSION);
+    }
+
     // Pickups
     for pk in &mut state.pickups {
         if !pk.alive { continue; }
         pk.timer -= dt;
         if pk.timer <= 0.0 { pk.alive = false; continue; }
 
-        for pidx in 0..2u8 {
-            if pidx == 1 && !state.two_player { continue; }
-            let player = if pidx == 0 { &state.player1 } else { &state.player2 };
-            if !player.alive { continue; }
-            let ddx = player.x - pk.x;
-            let ddy = player.y - pk.y;
+        for pidx in 0..np.min(state.players.len()) {
+            if !state.players[pidx].alive { continue; }
+            let ddx = state.players[pidx].x - pk.x;
+            let ddy = state.players[pidx].y - pk.y;
             if ddx * ddx + ddy * ddy < PICKUP_RANGE * PICKUP_RANGE {
                 pk.alive = false;
                 state.events.push(SND_PICKUP);
-                let player = if pidx == 0 { &mut state.player1 } else { &mut state.player2 };
                 match pk.kind {
-                    PickupKind::Health => player.hp = (player.hp + 25).min(player.max_hp),
-                    PickupKind::Ammo => player.ammo += 15,
+                    PickupKind::Health => {
+                        let max = state.players[pidx].max_hp;
+                        state.players[pidx].hp = (state.players[pidx].hp + 25).min(max);
+                    }
+                    PickupKind::Ammo => state.players[pidx].ammo += 15,
                 }
                 break;
             }
@@ -312,26 +385,30 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
         state.wave_delay -= dt;
         if state.wave_delay <= 0.0 {
             state.wave += 1;
-            let base = if state.two_player { 5 } else { 3 };
+            let base = if np > 1 { 3 + np as u32 } else { 3 };
             state.zombies_to_spawn = base + state.wave * 2;
             state.wave_delay = 3.0;
             let ammo_bonus = 10 + (state.wave as i32) * 2;
-            state.player1.ammo += ammo_bonus;
-            if state.two_player { state.player2.ammo += ammo_bonus; }
+            for i in 0..np.min(state.players.len()) {
+                state.players[i].ammo += ammo_bonus;
+            }
             state.events.push(SND_WAVE);
 
-            if state.two_player {
-                if !state.player1.alive {
-                    state.player1.alive = true;
-                    state.player1.hp = 50;
-                    state.player1.x = MAP_W as f32 * TILE / 2.0 - 20.0;
-                    state.player1.y = MAP_H as f32 * TILE / 2.0;
-                }
-                if !state.player2.alive {
-                    state.player2.alive = true;
-                    state.player2.hp = 50;
-                    state.player2.x = MAP_W as f32 * TILE / 2.0 + 20.0;
-                    state.player2.y = MAP_H as f32 * TILE / 2.0;
+            // Revive dead players at wave start (multiplayer)
+            if np > 1 {
+                let cx = MAP_W as f32 * TILE / 2.0;
+                let cy = MAP_H as f32 * TILE / 2.0;
+                let spawn_offsets: [(f32, f32); 4] = [
+                    (-30.0, -20.0), (30.0, -20.0),
+                    (-30.0,  20.0), (30.0,  20.0),
+                ];
+                for i in 0..np.min(state.players.len()) {
+                    if !state.players[i].alive {
+                        state.players[i].alive = true;
+                        state.players[i].hp = 50;
+                        state.players[i].x = cx + spawn_offsets[i].0;
+                        state.players[i].y = cy + spawn_offsets[i].1;
+                    }
                 }
             }
         }
@@ -355,41 +432,48 @@ pub fn update_game(state: &mut GameState, local_input: &LocalInput, remote_input
             };
             let wave = state.wave;
             let hp = 50 + (wave as i32) * 15;
-            let is_fire = wave >= 2 && rand::gen_range(0.0f32, 1.0) < 0.3;
-            let variant = if is_fire { 3 } else { rand::gen_range(0u8, 3) };
+            let roll = rand::gen_range(0.0f32, 1.0);
+            let is_fire = wave >= 2 && roll < 0.25;
+            let is_explosive = wave >= 2 && !is_fire && roll < 0.35;
+            let variant = if is_explosive { 4 } else if is_fire { 3 } else { rand::gen_range(0u8, 3) };
             let base_speed = ZOMBIE_BASE_SPEED + (wave as f32) * 3.0 + rand::gen_range(-10.0, 10.0);
-            let speed = if is_fire { base_speed * 1.3 } else { base_speed };
+            let speed = if is_fire { base_speed * 1.3 } else if is_explosive { base_speed * 0.8 } else { base_speed };
+            let zhp = if is_explosive { hp / 2 } else { hp };
             state.zombies.push(Zombie {
-                x: sx, y: sy, hp, max_hp: hp, alive: true,
+                x: sx, y: sy, hp: zhp, max_hp: zhp, alive: true,
                 speed, damage_flash: 0.0, variant, attack_timer: 0.0,
             });
         }
     }
 }
 
-// ── Client-side extrapolation (smooth rendering between server updates) ──
+// ── Client-side extrapolation ─────────────────────────────
 pub fn client_extrapolate(state: &mut GameState, local_input: &LocalInput, my_slot: u8, dt: f32) {
-    // Move local player based on input (instant response)
-    let player = if my_slot == 1 { &mut state.player2 } else { &mut state.player1 };
-    if player.alive {
+    let np = state.num_players as usize;
+    let slot = my_slot as usize;
+
+    // Move local player
+    if slot < np && slot < state.players.len() && state.players[slot].alive {
         let mut dx = local_input.dx;
         let mut dy = local_input.dy;
         let len = (dx * dx + dy * dy).sqrt();
         if len > 0.0 {
             dx /= len;
             dy /= len;
-            let nx = player.x + dx * PLAYER_SPEED * dt;
-            let ny = player.y + dy * PLAYER_SPEED * dt;
-            if can_move(nx, player.y, 6.0) { player.x = nx; }
-            if can_move(player.x, ny, 6.0) { player.y = ny; }
+            let nx = state.players[slot].x + dx * PLAYER_SPEED * dt;
+            let ny = state.players[slot].y + dy * PLAYER_SPEED * dt;
+            if can_move(nx, state.players[slot].y, 6.0) { state.players[slot].x = nx; }
+            if can_move(state.players[slot].x, ny, 6.0) { state.players[slot].y = ny; }
         }
-        player.angle = local_input.angle;
-        player.damage_flash = (player.damage_flash - dt * 5.0).max(0.0);
+        state.players[slot].angle = local_input.angle;
+        state.players[slot].damage_flash = (state.players[slot].damage_flash - dt * 5.0).max(0.0);
     }
 
-    // Move remote player damage flash
-    let other = if my_slot == 1 { &mut state.player1 } else { &mut state.player2 };
-    other.damage_flash = (other.damage_flash - dt * 5.0).max(0.0);
+    // Update other players' damage flash
+    for i in 0..np.min(state.players.len()) {
+        if i == slot { continue; }
+        state.players[i].damage_flash = (state.players[i].damage_flash - dt * 5.0).max(0.0);
+    }
 
     // Extrapolate bullets
     for b in &mut state.bullets {
@@ -407,23 +491,23 @@ pub fn client_extrapolate(state: &mut GameState, local_input: &LocalInput, my_sl
     }
     state.bullets.retain(|b| b.alive);
 
-    // Extrapolate zombies toward closest player
-    let p1_alive = state.player1.alive;
-    let p2_alive = state.two_player && state.player2.alive;
-    let p1x = state.player1.x;
-    let p1y = state.player1.y;
-    let p2x = state.player2.x;
-    let p2y = state.player2.y;
+    // Extrapolate zombies
+    let player_data: Vec<(f32, f32, bool)> = (0..np.min(state.players.len()))
+        .map(|i| (state.players[i].x, state.players[i].y, state.players[i].alive))
+        .collect();
 
     for z in &mut state.zombies {
         if !z.alive { continue; }
         z.damage_flash = (z.damage_flash - dt * 5.0).max(0.0);
 
-        let (tx, ty) = {
-            let d1 = if p1_alive { ((p1x - z.x).powi(2) + (p1y - z.y).powi(2)).sqrt() } else { f32::MAX };
-            let d2 = if p2_alive { ((p2x - z.x).powi(2) + (p2y - z.y).powi(2)).sqrt() } else { f32::MAX };
-            if d1 <= d2 { (p1x, p1y) } else { (p2x, p2y) }
-        };
+        let mut min_dist = f32::MAX;
+        let mut tx = z.x;
+        let mut ty = z.y;
+        for &(px, py, alive) in &player_data {
+            if !alive { continue; }
+            let d = ((px - z.x).powi(2) + (py - z.y).powi(2)).sqrt();
+            if d < min_dist { min_dist = d; tx = px; ty = py; }
+        }
 
         let to_x = tx - z.x;
         let to_y = ty - z.y;
