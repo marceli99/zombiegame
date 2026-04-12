@@ -254,7 +254,7 @@ pub async fn load_sounds() -> Sounds {
         menu_navigate: load_sound_from_bytes(&gen_menu_navigate_sound()).await.unwrap(),
         menu_select: load_sound_from_bytes(&gen_menu_select_sound()).await.unwrap(),
         menu_music: load_sound_from_bytes(&gen_menu_music()).await.unwrap(),
-        game_music: load_sound_from_bytes(&gen_game_music()).await.unwrap(),
+        game_music: macroquad::audio::load_sound("assets/sounds/game_music.wav").await.unwrap(),
     }
 }
 
@@ -273,7 +273,7 @@ pub fn play_sfx(sound: &Sound, volume: f32) {
 pub fn play_events(events: &[u8], sounds: &Sounds) {
     for &e in events {
         match e {
-            SND_SHOOT => play_sfx(&sounds.shoot, 0.3),
+            SND_SHOOT => play_sfx(&sounds.shoot, 0.25),
             SND_ZOMBIE_HIT => play_sfx(&sounds.zombie_hit, 0.2),
             SND_ZOMBIE_DEATH => play_sfx(&sounds.zombie_death, 0.5),
             SND_HURT => play_sfx(&sounds.hurt, 0.4),
