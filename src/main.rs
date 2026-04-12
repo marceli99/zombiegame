@@ -29,6 +29,22 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // Ensure the working directory is set to the executable's directory,
+    // so assets are resolved correctly no matter from where the program is executed.
+    if let Ok(mut path) = std::env::current_exe() {
+        path.pop(); // Remove the executable name
+        let _ = std::env::set_current_dir(&path);
+        // Fallback: if assets don't exist next to the executable, try the project root 
+        // (two directories up: target/debug -> project_root)
+        if !std::path::Path::new("assets").exists() {
+            path.pop();
+            path.pop();
+            if path.join("assets").exists() {
+                let _ = std::env::set_current_dir(path);
+            }
+        }
+    }
+
     let sounds = load_sounds().await;
     play_music(&sounds.menu_music, 0.35);
     let mut menu_music_playing = true;

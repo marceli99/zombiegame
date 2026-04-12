@@ -60,6 +60,7 @@ jobs:
           mkdir -p ${{ matrix.artifact }}
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.artifact }}/
           cp target/${{ matrix.target }}/release/${{ matrix.server_binary }} ${{ matrix.artifact }}/
+          cp -r assets ${{ matrix.artifact }}/
           tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 
       - name: Package (Windows)
@@ -69,6 +70,7 @@ jobs:
           mkdir -p ${{ matrix.artifact }}
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.artifact }}/
           cp target/${{ matrix.target }}/release/${{ matrix.server_binary }} ${{ matrix.artifact }}/
+          cp -r assets ${{ matrix.artifact }}/
           7z a ${{ matrix.artifact }}.zip ${{ matrix.artifact }}
 
       - name: Upload artifact
